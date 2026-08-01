@@ -5,14 +5,13 @@ tuple is either ``(text,)`` or ``(text, base64_png_image)``.  A client takes
 such a list plus a system prompt and returns the model response as a string.
 
 Two backends are provided:
-    - "openai": any OpenAI-compatible chat completion endpoint (GPT-4o, ...)
-    - "ollama": a local ollama server (native /api/chat endpoint)
+    - "openai": the OpenAI API or any OpenAI-compatible endpoint (GPT-4o, ...)
+    - "ollama": a local ollama server, through its OpenAI-compatible /v1 API
 
 The backend and its settings are read from src/const.py, which in turn can be
 overridden with environment variables (see that file).
 """
 
-import json
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -21,9 +20,7 @@ from typing import List, Optional, Sequence, Tuple
 from src.const import (
     END_POINT,
     OLLAMA_END_POINT,
-    OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
-    OLLAMA_NUM_CTX,
     OLLAMA_TIMEOUT,
     OPENAI_KEY,
     OPENAI_MODEL,
@@ -82,21 +79,24 @@ class VLMClient(ABC):
 
 
 class OpenAIClient(VLMClient):
-    """OpenAI (or any OpenAI-compatible) chat completion endpoint."""
+    """The OpenAI API, or any OpenAI-compatible chat completion endpoint."""
 
-    def __init__(self, model=None, end_point=None, api_key=None, **kwargs):
+    def __init__(self, model=None, end_point=None, api_key=None, timeout=None, **kwargs):
         super().__init__(model=model or OPENAI_MODEL, **kwargs)
         import openai
         from openai import OpenAI
 
         self._openai = openai
         end_point = END_POINT if end_point is None else end_point
-        self.client = OpenAI(
+        client_kwargs = {
             # an empty base_url would be passed through as-is, so fall back to
             # the SDK default (the official API) when it is not configured
-            base_url=end_point or None,
-            api_key=OPENAI_KEY if api_key is None else api_key,
-        )
+            "base_url": end_point or None,
+            "api_key": OPENAI_KEY if api_key is None else api_key,
+        }
+        if timeout is not None:
+            client_kwargs["timeout"] = timeout
+        self.client = OpenAI(**client_kwargs)
 
     @staticmethod
     def format_content(contents: Content) -> List[dict]:
@@ -136,72 +136,42 @@ class OpenAIClient(VLMClient):
         return isinstance(e, self._openai.RateLimitError)
 
 
-class OllamaClient(VLMClient):
-    """Local ollama server, through its native /api/chat endpoint.
+class OllamaClient(OpenAIClient):
+    """A local ollama server, through its OpenAI-compatible /v1 API.
 
-    Ollama takes the images of a message as a separate list of base64 strings
-    instead of interleaving them with the text, so the texts are concatenated
-    in order and the images are appended in the same order.
+    Ollama's native /api/chat endpoint takes the images of a message as a
+    separate list instead of interleaving them with the text, and the model
+    then cannot tell which image belongs to which "Snapshot i" label (verified
+    on ollama 0.32.5 / qwen2.5vl:7b: it mismatches the images). The /v1 API
+    keeps text and images interleaved, so it is the one used here.
+
+    Note that /v1 ignores per-request context length: it is set on the server,
+    with the OLLAMA_CONTEXT_LENGTH environment variable of `ollama serve`.
     """
 
-    def __init__(
-        self,
-        model=None,
-        end_point=None,
-        num_ctx=None,
-        timeout=None,
-        keep_alive=None,
-        **kwargs,
-    ):
-        super().__init__(model=model or OLLAMA_MODEL, **kwargs)
-        import requests
-
-        self._requests = requests
-        self.end_point = (OLLAMA_END_POINT if end_point is None else end_point).rstrip(
-            "/"
+    def __init__(self, model=None, end_point=None, timeout=None, **kwargs):
+        end_point = OLLAMA_END_POINT if end_point is None else end_point
+        super().__init__(
+            model=model or OLLAMA_MODEL,
+            end_point=f"{end_point.rstrip('/')}/v1",
+            api_key="ollama",  # ollama ignores the key, but it must be non-empty
+            timeout=OLLAMA_TIMEOUT if timeout is None else timeout,
+            **kwargs,
         )
-        self.num_ctx = OLLAMA_NUM_CTX if num_ctx is None else num_ctx
-        self.timeout = OLLAMA_TIMEOUT if timeout is None else timeout
-        self.keep_alive = OLLAMA_KEEP_ALIVE if keep_alive is None else keep_alive
+        self._warn_if_model_missing()
 
-    @staticmethod
-    def format_content(contents: Content) -> Tuple[str, List[str]]:
-        text, images = "", []
-        for c in contents:
-            text += c[0]
-            if len(c) == 2:
-                images.append(c[1])
-        return text, images
-
-    def _chat(self, sys_prompt: str, contents: Content) -> str:
-        text, images = self.format_content(contents)
-        user_message = {"role": "user", "content": text}
-        if images:
-            user_message["images"] = images
-
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": sys_prompt},
-                user_message,
-            ],
-            "stream": False,
-            "keep_alive": self.keep_alive,
-            "options": {
-                "temperature": self.temperature,
-                "top_p": self.top_p,
-                "num_predict": self.max_tokens,
-                "num_ctx": self.num_ctx,
-            },
-        }
-        response = self._requests.post(
-            f"{self.end_point}/api/chat", json=payload, timeout=self.timeout
-        )
-        response.raise_for_status()
-        result = response.json()
-        if "message" not in result:
-            raise RuntimeError(f"Unexpected ollama response: {json.dumps(result)[:500]}")
-        return result["message"]["content"]
+    def _warn_if_model_missing(self):
+        """Fail loudly at startup instead of after the first prompt."""
+        try:
+            available = [m.id for m in self.client.models.list().data]
+        except Exception as e:
+            logging.warning(f"Could not reach the ollama server at {self.client.base_url}: {e}")
+            return
+        if self.model not in available:
+            logging.warning(
+                f"Model '{self.model}' is not available in ollama (found: {available}). "
+                f"Run `ollama pull {self.model}` first."
+            )
 
 
 BACKENDS = {
@@ -230,4 +200,6 @@ if __name__ == "__main__":
     # smoke test: python -m src.vlm_client
     logging.basicConfig(level=logging.INFO)
     client = create_vlm_client(max_tries=1)
-    print(client.call("You are a helpful assistant.", [("Say 'hello' and nothing else.",)]))
+    print(
+        client.call("You are a helpful assistant.", [("Say 'hello' and nothing else.",)])
+    )

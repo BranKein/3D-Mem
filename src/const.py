@@ -12,10 +12,9 @@ OPENAI_KEY = os.environ.get("OPENAI_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 # about ollama, used when VLM_PROVIDER == "ollama"
+# note that the context length is NOT set here: it is a property of the ollama
+# server (the OLLAMA_CONTEXT_LENGTH environment variable of `ollama serve`),
+# and the prompts contain many images, so it needs to be large
 OLLAMA_END_POINT = os.environ.get("OLLAMA_END_POINT", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5vl:7b")
-# the prompts contain many images, so the default context length is far too
-# small: anything beyond it is silently truncated by ollama
-OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", 32768))
 OLLAMA_TIMEOUT = float(os.environ.get("OLLAMA_TIMEOUT", 600))
-OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "30m")

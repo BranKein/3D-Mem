@@ -69,13 +69,16 @@ The evaluation prompts a vision-language model at each step. Two backends are su
 
 **OpenAI (default, `VLM_PROVIDER = "openai"`)**: set the endpoint and API key in `src/const.py` (`END_POINT`, `OPENAI_KEY`). Leave `END_POINT` empty to use the official API. The model is `OPENAI_MODEL` (default `gpt-4o`). This backend also works with any OpenAI-compatible server (vLLM, LiteLLM, ...).
 
-**Ollama (`VLM_PROVIDER = "ollama"`)**: runs a local vision model, no API key needed. Pull a vision model first and then run the evaluation:
+**Ollama (`VLM_PROVIDER = "ollama"`)**: runs a local vision model, no API key needed. Pull a vision model, then run the evaluation — the ollama server loads the model on the first request, nothing else to start:
 ```bash
 ollama pull qwen2.5vl:7b
 VLM_PROVIDER=ollama OLLAMA_MODEL=qwen2.5vl:7b python run_aeqa_evaluation.py -cf cfg/eval_aeqa.yaml
 ```
-Relevant settings: `OLLAMA_END_POINT` (default `http://localhost:11434`), `OLLAMA_MODEL`, `OLLAMA_NUM_CTX`, `OLLAMA_TIMEOUT`, `OLLAMA_KEEP_ALIVE`.
-Note that the prompts contain many images, so the model **must** be a vision model and `OLLAMA_NUM_CTX` must be large enough — ollama silently truncates anything beyond the context window. Lowering `prompt_h`/`prompt_w` and `top_k_categories` in the config keeps the prompt smaller.
+Relevant settings: `OLLAMA_END_POINT` (default `http://localhost:11434`), `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`.
+
+Two things to watch out for:
+- The model **must** be a vision model, and each prompt contains many images, so the server's context length must be large. Context length is a server setting, not a per-request one: start the server with `OLLAMA_CONTEXT_LENGTH=32768 ollama serve` (or add it to the systemd unit), and check what a loaded model actually got with `curl -s localhost:11434/api/ps`. Anything beyond the context window is silently truncated. Lowering `prompt_h`/`prompt_w` and `top_k_categories` in the config keeps the prompt smaller.
+- This backend uses ollama's OpenAI-compatible `/v1` API on purpose. The native `/api/chat` endpoint passes images as a separate list rather than interleaved with the text, and the model then cannot tell which image belongs to which `Snapshot i` label.
 
 To check that the configured backend answers:
 ```bash
