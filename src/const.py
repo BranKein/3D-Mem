@@ -4,7 +4,7 @@ import os
 INVALID_SCENE_ID = []
 
 # which VLM backend to use for the evaluation: "openai" or "ollama"
-VLM_PROVIDER = os.environ.get("VLM_PROVIDER", "openai")
+VLM_PROVIDER = os.environ.get("VLM_PROVIDER", "ollama")
 
 # about chatgpt api (also works for any OpenAI-compatible endpoint)
 END_POINT = os.environ.get("OPENAI_END_POINT", "")

@@ -27,6 +27,8 @@ from src.const import (
     VLM_PROVIDER,
 )
 
+logger = logging.getLogger(__name__)
+
 Content = Sequence[Tuple]
 
 
@@ -165,10 +167,10 @@ class OllamaClient(OpenAIClient):
         try:
             available = [m.id for m in self.client.models.list().data]
         except Exception as e:
-            logging.warning(f"Could not reach the ollama server at {self.client.base_url}: {e}")
+            logger.warning(f"Could not reach the ollama server at {self.client.base_url}: {e}")
             return
         if self.model not in available:
-            logging.warning(
+            logger.warning(
                 f"Model '{self.model}' is not available in ollama (found: {available}). "
                 f"Run `ollama pull {self.model}` first."
             )
@@ -192,7 +194,7 @@ def create_vlm_client(provider: Optional[str] = None, **kwargs) -> VLMClient:
             f"Unknown VLM provider '{provider}', expected one of {sorted(BACKENDS)}"
         )
     client = BACKENDS[provider](**kwargs)
-    logging.info(f"Using {provider} VLM backend with model {client.model}")
+    logger.info(f"Using {provider} VLM backend with model {client.model}")
     return client
 
 

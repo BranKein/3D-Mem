@@ -47,9 +47,57 @@ conda install -c conda-forge -c aihabitat habitat-sim=0.2.5 headless faiss-cpu=1
 conda install https://anaconda.org/pytorch3d/pytorch3d/0.7.4/download/linux-64/pytorch3d-0.7.4-py39_cu118_pyt201.tar.bz2 -y
 
 pip install omegaconf==2.3.0 open-clip-torch==2.26.1 ultralytics==8.2.31 supervision==0.21.0 opencv-python-headless==4.10.* \
- scikit-learn==1.4 scikit-image==0.22 open3d==0.18.0 hipart==1.0.4 openai==1.35.3 httpx==0.27.2                                                      
+ scikit-learn==1.4 scikit-image==0.22 open3d==0.18.0 hipart==1.0.4 openai==1.35.3 httpx==0.27.2 scipy==1.11.4
 
 ```
+
+### Numpy ABI troubleshooting
+
+This environment runs numpy 1.x. Mixing in anything built against the **numpy 2 ABI** produces runtime errors that never mention numpy, so they are easy to misdiagnose. Symptoms seen in practice:
+
+```
+# scipy — also takes down habitat_sim, open3d, sklearn and HiPart, since they all import it
+File "scipy/interpolate/_fitpack_impl.py", line 103, in <module>
+    'iwrk': array([], dfitpack_int), 'u': array([], float),
+TypeError
+
+# numba — every jitted function fails on its first call, e.g. TSDFPlannerBase.vox2world
+TypeError: can't unbox array from PyObject into native value.  The object maybe of a different type
+
+# pandas (reached through ultralytics)
+TypeError: Cannot convert numpy.ndarray to numpy.ndarray
+
+# opencv
+cv2.error: Overload resolution failed: src is not a numpy array, neither a scalar
+```
+
+**First check whether numpy itself is intact.** If a numpy 2.x install was ever laid on top of a numpy 1.x one (or vice versa), `site-packages/numpy/` keeps files from both, and `pip uninstall` only removes the ones its own RECORD lists. Two numpy C cores then load in the same process and every package above breaks no matter which version of it you install. In numpy 1.26 `numpy/_core/` is a pure-Python shim, so any `.so` in it is a leftover from a numpy 2 install:
+
+```bash
+python -c "import numpy, sys; print(numpy.__version__, numpy.__file__)"
+ls "$(python -c 'import numpy,os;print(os.path.dirname(numpy.__file__))')/_core/"*.so 2>/dev/null && echo "LEFTOVERS -- numpy install is mixed"
+```
+
+To repair, wipe the package directory and reinstall — uninstalling alone is not enough:
+
+```bash
+pip uninstall -y numpy
+rm -rf "<site-packages>/numpy"        # remove whatever survived the uninstall
+rm -rf "<site-packages>"/numpy-*.dist-info
+pip install "numpy==1.26.4"
+```
+
+Verify with a single loaded C core and a round of real operations:
+
+```bash
+python -c "
+import numpy as np, sys, cv2, pandas, numba
+print(sorted({m.__file__ for n,m in sys.modules.items() if n.startswith('numpy') and getattr(m,'__file__','') .endswith('.so') and 'multiarray_umath' in m.__file__}))
+cv2.resize(np.zeros((8,8,3), np.uint8), (4,4)); pandas.DataFrame([[1,'a']], columns=['x','y'])
+print('numba', numba.njit(lambda a: a.sum())(np.arange(10.)))"
+```
+
+A known-good set for numpy 1.26.4 on Python 3.9: `scipy==1.11.4`, `numba==0.58.1`, `llvmlite==0.41.1`, `pandas==2.2.2`, `opencv-python-headless==4.10.0.84`. Install only the headless OpenCV — `opencv-python` and `opencv-python-headless` share the same `cv2/` directory, so having both means whichever was installed last silently wins.
 
 
 ## Run Evaluation
