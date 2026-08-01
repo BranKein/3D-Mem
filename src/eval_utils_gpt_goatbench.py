@@ -1,72 +1,19 @@
-import openai
-from openai import OpenAI
 from PIL import Image
 import base64
 from io import BytesIO
-import os
-import time
 from typing import Optional
 import logging
 from src.const import *
+from src.vlm_client import create_vlm_client
 
 
-client = OpenAI(
-    base_url=END_POINT,
-    api_key=OPENAI_KEY,
-)
+# the backend (openai / ollama) is selected in src/const.py
+client = create_vlm_client(max_tries=5, rate_limit_wait=3, error_wait=3)
 
 
-def format_content(contents):
-    formated_content = []
-    for c in contents:
-        formated_content.append({"type": "text", "text": c[0]})
-        if len(c) == 2:
-            formated_content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{c[1]}",
-                        "detail": "high",
-                    },
-                }
-            )
-    return formated_content
-
-
-# send information to openai
-def call_openai_api(sys_prompt, contents) -> Optional[str]:
-    max_tries = 5
-    retry_count = 0
-    formated_content = format_content(contents)
-    message_text = [
-        {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": formated_content},
-    ]
-    while retry_count < max_tries:
-        try:
-            completion = client.chat.completions.create(
-                model="gpt-4o",  # model = "deployment_name"
-                messages=message_text,
-                temperature=0.7,
-                max_tokens=4096,
-                top_p=0.95,
-                frequency_penalty=0,
-                presence_penalty=0,
-                stop=None,
-            )
-            return completion.choices[0].message.content
-        except openai.RateLimitError as e:
-            print("Rate limit error, waiting for 3s")
-            time.sleep(3)
-            retry_count += 1
-            continue
-        except Exception as e:
-            print("Error: ", e)
-            time.sleep(3)
-            retry_count += 1
-            continue
-
-    return None
+# send information to the vlm
+def call_vlm_api(sys_prompt, contents) -> Optional[str]:
+    return client.call(sys_prompt, contents)
 
 
 # encode tensor images to base64 format
@@ -302,7 +249,7 @@ def get_prefiltering_classes(question, seen_classes, top_k=10, image_goal=None):
         message += c[0]
         if len(c) == 2:
             message += f": image {c[1][:10]}..."
-    response = call_openai_api(prefiltering_sys, prefiltering_content)
+    response = call_vlm_api(prefiltering_sys, prefiltering_content)
     if response is None:
         return []
 
@@ -392,10 +339,10 @@ def explore_step(step, cfg, verbose=False):
     final_response = None
     final_reason = None
     for _ in range(retry_bound):
-        response = call_openai_api(sys_prompt, content)
+        response = call_vlm_api(sys_prompt, content)
 
         if response is None:
-            print("call_openai_api returns None, retrying")
+            print("call_vlm_api returns None, retrying")
             continue
 
         response = response.strip()

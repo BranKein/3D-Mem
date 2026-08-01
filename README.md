@@ -64,8 +64,23 @@ contains `/your_path/hm3d/train/` and `/your_path/hm3d/val/`, you can set the `s
 The test questions of A-EQA and GOAT-Bench are provided in the `data/` folder. For A-EQA, we provide two subsets of different size: `aeqa_questions-41.json` and `aeqa_questions-184.json`, where `aeqa_questions-184.json` is the official subset provided by OpenEQA and `aeqa_questions-41.json` is a smaller subset for quick evaluation.
 For GOAT-Bench, we include the complete `val_unseen` split in this repository.
 
-#### OpenAI API Setup
-Please set up the endpoint and API key for the OpenAI API in `src/const.py`.
+#### VLM Setup
+The evaluation prompts a vision-language model at each step. Two backends are supported, selected with `VLM_PROVIDER` in `src/const.py` (every setting there can also be overridden with the environment variable of the same name):
+
+**OpenAI (default, `VLM_PROVIDER = "openai"`)**: set the endpoint and API key in `src/const.py` (`END_POINT`, `OPENAI_KEY`). Leave `END_POINT` empty to use the official API. The model is `OPENAI_MODEL` (default `gpt-4o`). This backend also works with any OpenAI-compatible server (vLLM, LiteLLM, ...).
+
+**Ollama (`VLM_PROVIDER = "ollama"`)**: runs a local vision model, no API key needed. Pull a vision model first and then run the evaluation:
+```bash
+ollama pull qwen2.5vl:7b
+VLM_PROVIDER=ollama OLLAMA_MODEL=qwen2.5vl:7b python run_aeqa_evaluation.py -cf cfg/eval_aeqa.yaml
+```
+Relevant settings: `OLLAMA_END_POINT` (default `http://localhost:11434`), `OLLAMA_MODEL`, `OLLAMA_NUM_CTX`, `OLLAMA_TIMEOUT`, `OLLAMA_KEEP_ALIVE`.
+Note that the prompts contain many images, so the model **must** be a vision model and `OLLAMA_NUM_CTX` must be large enough — ollama silently truncates anything beyond the context window. Lowering `prompt_h`/`prompt_w` and `top_k_categories` in the config keeps the prompt smaller.
+
+To check that the configured backend answers:
+```bash
+python -m src.vlm_client
+```
 
 ### 2 - Run Evaluation on A-EQA
 
