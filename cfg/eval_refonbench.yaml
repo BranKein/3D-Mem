@@ -12,7 +12,7 @@ test_data_dir: "RefONEpisodeGenerator/out/refon_example_dataset/v1/val/content/"
 
 # A RefON shard can hold thousands of episodes per scene. Truncate to a stable prefix
 # so runs are reproducible and comparable; null/0 means "use every episode".
-episodes_per_scene: 10
+episodes_per_scene: null
 # GA_* subtasks name no object (unbound alias / out-of-range ordinal / absent category).
 # 3D-Mem cannot score "the correct action is to stop", so they are dropped by default.
 skip_goal_absent: true
