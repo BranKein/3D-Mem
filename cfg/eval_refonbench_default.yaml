@@ -1,6 +1,6 @@
 # General
 seed: 77
-exp_name: "exp_eval_refonbench"
+exp_name: "exp_eval_refonbench_default"
 output_parent_dir: "results"
 scene_dataset_config_path: "data/hm3d_annotated_basis.scene_dataset_config.json"
 scene_data_path: "data/hm3d"
