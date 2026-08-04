@@ -4,6 +4,11 @@ results/
 *.xml
 .idea/
 
+# HM3D scene meshes + semantic annotations. Tens of GB, licensed per-user via the
+# Matterport agreement, and the layout under it is machine-specific (symlinks into
+# wherever the download landed). Re-fetch with habitat_sim.utils.datasets_download.
+data/hm3d/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
