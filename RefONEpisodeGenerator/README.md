@@ -166,8 +166,9 @@ Output: `{dataset_root}/{split}/content/{scene}.json.gz` (one shard per scene).
 > means "done", the main process owns the progress file, and interrupted runs skip finished
 > scenes. Pick `N` by RAM/GPU headroom (each worker ≈ 2GB + its own sim).
 
-> `hm3d-scene-loader` is looked up at `~/PycharmProjects/hm3d-scene-loader` by default.
-> Set `HM3D_SCENE_LOADER_PATH` to point elsewhere.
+> **`hm3d-scene-loader` is bundled** at `hm3d_scene_loader/`, so a fresh clone builds
+> with no extra checkout — see [bundled dependency](#bundled-dependency--hm3d_scene_loader)
+> below.
 
 ### Getting HM3D scenes (one-time download)
 
@@ -414,5 +415,40 @@ and it is automatically treated as a "last subgoal only" style.
 
 - **command 1 / validate**: standard library only (nothing to install).
 - **plot**: `matplotlib`.
-- **command 2 (build)**: `habitat-sim` + `hm3d-scene-loader` + `numpy`.
-  (See `requirements.txt`. habitat-sim is best installed via conda.)
+- **command 2 (build)**: `habitat-sim` + `numpy`. `hm3d-scene-loader` needs no install --
+  it ships in this repo. (See `requirements.txt`. habitat-sim is best installed via conda.)
+
+### bundled dependency — `hm3d_scene_loader/`
+
+Verbatim copy of the `hm3d_scene_loader` package from the separate `hm3d-scene-loader`
+project (`~/PycharmProjects/hm3d-scene-loader`, not a git repository — there is no
+upstream URL to submodule). Only the package directory is copied; its `SPEC.md` and
+`examples/` are not. It wraps habitat-sim to expose one HM3D scene's semantic objects,
+sampled viewpoints, image-goal camera parameters, and start states in the GOAT
+goal-catalog format. `refon/episode_builder.py` is its only consumer.
+
+`_import_loader()` takes the first directory that actually contains
+`hm3d_scene_loader/__init__.py`:
+
+1. `$HM3D_SCENE_LOADER_PATH`
+2. this project root (the bundled copy — the default)
+3. `~/PycharmProjects/hm3d-scene-loader`
+
+To develop against the original checkout instead:
+
+```bash
+HM3D_SCENE_LOADER_PATH=~/PycharmProjects/hm3d-scene-loader \
+    python RefONEpisodeGenerator/main.py build ...
+```
+
+To re-sync the bundled copy after changing the original:
+
+```bash
+rsync -a --exclude='__pycache__' --exclude='.DS_Store' \
+    ~/PycharmProjects/hm3d-scene-loader/hm3d_scene_loader/ \
+    RefONEpisodeGenerator/hm3d_scene_loader/
+```
+
+Keep the two in sync deliberately: the viewpoint sampling parameters here have to match
+the evaluator's navmesh settings, or generated viewpoints may not be navigable at
+evaluation time (see the note at the top of `hm3d_scene_loader/config.py`).

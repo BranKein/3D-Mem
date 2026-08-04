@@ -36,23 +36,49 @@ class NoUsableObject(RuntimeError):
     pass
 
 
-def _import_loader():
-    """Import hm3d_scene_loader (with a friendly error if missing)."""
-    candidates = [
+def _loader_search_paths():
+    """Directories that may contain the hm3d_scene_loader package, highest priority first.
+
+    A copy is bundled next to refon/, so a fresh clone builds without any external
+    checkout. HM3D_SCENE_LOADER_PATH still overrides it, for working against a separate
+    hm3d-scene-loader checkout without editing the bundled copy.
+    """
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return [
         os.environ.get("HM3D_SCENE_LOADER_PATH"),
+        project_root,
         os.path.expanduser("~/PycharmProjects/hm3d-scene-loader"),
     ]
-    for p in candidates:
-        if p and os.path.isdir(p) and p not in sys.path:
-            sys.path.insert(0, p)
+
+
+def _import_loader():
+    """Import hm3d_scene_loader (with a friendly error if missing)."""
+    chosen = None
+    for p in _loader_search_paths():
+        # the entry must be the directory *containing* the package, not the package
+        if p and os.path.isfile(os.path.join(p, "hm3d_scene_loader", "__init__.py")):
+            chosen = p
+            break
+    # insert only the winner, so an explicit override is not shadowed by a later entry
+    if chosen and chosen not in sys.path:
+        sys.path.insert(0, chosen)
+
     try:
         from hm3d_scene_loader import HM3DSceneLoader, LoaderConfig  # type: ignore
         return HM3DSceneLoader, LoaderConfig
     except Exception as exc:  # pragma: no cover
+        if chosen is None:
+            raise ImportError(
+                "Could not find the hm3d_scene_loader package. Looked in:\n"
+                + "\n".join(f"  {p}" for p in _loader_search_paths() if p)
+                + "\nA copy is normally bundled at RefONEpisodeGenerator/hm3d_scene_loader/; "
+                "if it is missing, point HM3D_SCENE_LOADER_PATH at a directory containing "
+                "hm3d_scene_loader/. Cause: %s" % exc
+            )
         raise ImportError(
-            "Could not import hm3d_scene_loader. "
-            "Set the HM3D_SCENE_LOADER_PATH environment variable to its path, "
-            "or run inside a habitat-sim environment. Cause: %s" % exc
+            f"Found hm3d_scene_loader in {chosen} but could not import it. This is "
+            f"usually a missing habitat-sim -- run inside the habitat conda env "
+            f"(e.g. `conda run -n refon39 ...`). Cause: {exc}"
         )
 
 

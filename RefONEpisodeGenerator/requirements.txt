@@ -3,8 +3,11 @@
 #
 # command 2 (build) — 실제 HM3D episode json 생성에 아래가 필요하다.
 #   - habitat-sim (HM3D scene 로딩/navmesh/렌더)
-#   - hm3d-scene-loader  (~/PycharmProjects/hm3d-scene-loader, HM3D_SCENE_LOADER_PATH 로 지정 가능)
 #   - numpy  (hm3d-scene-loader 의존)
+#
+# hm3d-scene-loader 는 hm3d_scene_loader/ 에 포함되어 있으므로 따로 설치하지 않아도
+# 된다. 별도 체크아웃으로 개발할 때만 HM3D_SCENE_LOADER_PATH 로 덮어쓴다.
+# 자세한 내용은 README.md 의 "bundled dependency" 절 참고.
 #
 # habitat-sim 은 conda 설치를 권장한다(pip 패키지 아님):
 #   conda install habitat-sim withbullet -c conda-forge -c aihabitat
