@@ -1,0 +1,16 @@
+{
+  "_comment": "Smoke test against the free HM3D example scene (00861-GLAQ4DNUx5U), linked into 3D-Mem's data/hm3d/val/. Paths are relative to the 3D-Mem repo root, so run the CLI from there. scene_dataset_config is auto-detected from hm3d_root's parent, i.e. 3D-Mem's own data/hm3d_annotated_basis.scene_dataset_config.json -- the same file the evaluator uses.",
+  "split": "val",
+  "dataset_root": "RefONEpisodeGenerator/out/refon_example_dataset/v1",
+  "hm3d_root": "data/hm3d",
+  "compress": true,
+  "_comment_max_objects": "only ~19 of this scene's objects are visible from any navigable point, so the per-episode distinct-object budget has to stay small",
+  "max_objects": 5,
+  "category_whitelist": ["door", "lamp", "pillow", "book", "cardboard box", "clothes", "bathroom accessory", "toilet", "chair", "table", "cabinet", "sink", "shelf", "mirror", "picture", "window", "towel", "stool", "bench", "sofa", "bed", "counter", "basket", "plant"],
+  "viewpoint_min_iou": 0.005,
+  "viewpoint_num_candidates": 80,
+  "viewpoint_max_view_points": 20,
+  "min_geodesic": 1.0,
+  "max_geodesic": 30.0,
+  "seed": 0
+}

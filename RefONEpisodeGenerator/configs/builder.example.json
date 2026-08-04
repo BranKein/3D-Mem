@@ -1,0 +1,9 @@
+{
+  "split": "train",
+  "dataset_root": "data/datasets/refon/v1",
+  "max_objects": 8,
+  "category_whitelist": ["bed", "chair", "table", "sofa", "tv_monitor", "toilet", "couch", "cabinet"],
+  "absent_category_pool": ["dragon", "spaceship", "dinosaur", "piano", "elephant", "fireplace", "fountain"],
+  "with_image_goals": false,
+  "seed": 0
+}

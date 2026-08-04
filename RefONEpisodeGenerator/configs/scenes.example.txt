@@ -1,0 +1,8 @@
+# scene_id 목록 — generate 가 만든 scene 슬롯(scene_000, scene_001, ...) 순서대로 매핑된다.
+# 형식은 GOAT episode 의 scene_id 상대경로 또는 절대 .glb 경로.
+# '#' 로 시작하는 줄과 빈 줄은 무시된다. (txt 한 줄씩 / json list / json dict 도 허용)
+hm3d/train/00000-kfPV7w3FaU5/kfPV7w3FaU5.basis.glb
+hm3d/train/00001-UVdNNRcVyV1/UVdNNRcVyV1.basis.glb
+hm3d/train/00003-vLpv2VX547B/vLpv2VX547B.basis.glb
+hm3d/train/00004-qk9eeNeR4vw/qk9eeNeR4vw.basis.glb
+hm3d/train/00005-XB4GS9ShBRE/XB4GS9ShBRE.basis.glb

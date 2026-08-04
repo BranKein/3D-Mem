@@ -1,0 +1,16 @@
+{
+  "_comment": "Builds against 3D-Mem's own HM3D copy (cfg/eval_refonbench.yaml: scene_data_path). Paths are relative to the 3D-Mem repo root, so run the CLI from there.",
+  "split": "val",
+  "dataset_root": "RefONEpisodeGenerator/out/refon_val_unseen_dataset/v1",
+  "hm3d_root": "data/hm3d",
+  "compress": true,
+  "max_objects": 8,
+  "category_whitelist": ["chair","sofa","bed","couch","table","cabinet","sink","toilet","tv_monitor","stool","bench","shelf","dresser","potted plant","refrigerator","desk","door","picture","mirror","window"],
+  "_comment_min_iou": "min_iou is a frame-coverage fraction (object pixels / 512x512 frame), not an IoU. Measured on the example scene: 0.001 keeps 32% of whitelist objects as usable goals, 0.005 keeps 20%, 0.05 only 8%. Raising it starves the goal pool.",
+  "viewpoint_min_iou": 0.005,
+  "viewpoint_num_candidates": 80,
+  "viewpoint_max_view_points": 20,
+  "min_geodesic": 1.0,
+  "max_geodesic": 30.0,
+  "seed": 0
+}

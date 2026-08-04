@@ -1,0 +1,12 @@
+# command 1 (generate / validate) — 순수 표준 라이브러리만 사용. 추가 의존성 없음.
+# plot — matplotlib 으로 통계 PNG 저장 (아래 matplotlib).
+#
+# command 2 (build) — 실제 HM3D episode json 생성에 아래가 필요하다.
+#   - habitat-sim (HM3D scene 로딩/navmesh/렌더)
+#   - hm3d-scene-loader  (~/PycharmProjects/hm3d-scene-loader, HM3D_SCENE_LOADER_PATH 로 지정 가능)
+#   - numpy  (hm3d-scene-loader 의존)
+#
+# habitat-sim 은 conda 설치를 권장한다(pip 패키지 아님):
+#   conda install habitat-sim withbullet -c conda-forge -c aihabitat
+numpy>=1.21
+matplotlib>=3.5

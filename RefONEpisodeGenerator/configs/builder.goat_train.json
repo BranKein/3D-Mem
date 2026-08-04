@@ -1,0 +1,14 @@
+{
+  "split": "train",
+  "dataset_root": "out/goat_train_scale_dataset/v1",
+  "max_objects": 8,
+  "category_whitelist": ["chair","sofa","bed","couch","table","cabinet","sink","toilet","tv_monitor","stool","bench","shelf","dresser","potted plant","refrigerator","desk","door","picture","mirror","window"],
+  "scene_root": "data/scene_datasets/",
+  "scene_dataset_config": "data/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json",
+  "viewpoint_min_iou": 0.005,
+  "viewpoint_num_candidates": 80,
+  "viewpoint_max_view_points": 20,
+  "min_geodesic": 1.0,
+  "max_geodesic": 30.0,
+  "seed": 0
+}

@@ -1,0 +1,24 @@
+# --- generated / downloaded data (never commit) -----------------------------
+# HM3D scene meshes + semantic annotations. Tens of GB, licensed per-user via the
+# Matterport agreement, and re-downloadable with habitat_sim.utils.datasets_download.
+data/
+
+# Episode output: style lists from `generate` and the built shards from `build`
+# (out/<run>/scenes/*.json, out/<run>_dataset/**/content/*.json.gz), plus their
+# statistics, plots, and _progress.json / _build_progress.json checkpoints.
+# Regenerate with the configs under configs/, which ARE tracked.
+out/
+
+# --- local tooling ----------------------------------------------------------
+.claude/settings.local.json
+.DS_Store
+
+# --- python -----------------------------------------------------------------
+# The repo root .gitignore already covers these; repeated here so this folder still
+# behaves if it is ever split back out into its own repository.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
