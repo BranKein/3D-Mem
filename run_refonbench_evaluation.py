@@ -48,6 +48,7 @@ from src.refonbench_utils import (
 )
 from src.query_vlm_goatbench import query_vlm_for_response
 from src.logger_refonbench import Logger
+from src import log_context, prompts
 
 
 def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
@@ -105,7 +106,7 @@ def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
         cfg.output_dir, start_ratio, end_ratio, split, voxel_size=cfg.tsdf_grid_size
     )
 
-    for scene_data_file in scene_data_list:
+    for scene_data_idx, scene_data_file in enumerate(scene_data_list):
         # load refonbench data (the shard may be gzipped)
         scene_name = scene_name_from_shard(scene_data_file)
         matching_scene_ids = [s for s in all_scene_ids if scene_name in s]
@@ -116,6 +117,7 @@ def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
             )
             continue
         scene_id = matching_scene_ids[0]
+        log_context.set_scene(scene_data_idx + 1, len(scene_data_list), scene_id)
         scene_data = load_shard(os.path.join(cfg.test_data_dir, scene_data_file))
 
         # select the episodes according to episodes_per_scene and the split
@@ -129,9 +131,9 @@ def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
         ]  # obj_id to obj_data, apply for all episodes in this scene
 
         for episode_idx, episode in enumerate(selected_episodes):
-            logging.info(f"Episode {episode_idx + 1}/{total_episodes}")
-            logging.info(f"Loading scene {scene_id}")
             episode_id = episode["episode_id"]
+            log_context.set_episode(episode_idx + 1, total_episodes, episode_id)
+            logging.info(f"Loading scene {scene_id}")
 
             all_subtasks = prepare_refon_navigation_subtasks(
                 episode=episode,
@@ -200,8 +202,11 @@ def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
             global_step = -1
             for subtask_idx, subtask in enumerate(all_subtasks):
                 subtask_id = f"{scene_id}_{episode_id}_{subtask_idx}"
-                logging.info(
-                    f"\nScene {scene_id} Episode {episode_id} Subtask {subtask_idx + 1}/{len(all_subtasks)}"
+                log_context.set_subtask(
+                    subtask_idx + 1,
+                    len(all_subtasks),
+                    role=subtask["role"],
+                    instruction=subtask["instruction"],
                 )
                 logging.info(
                     f"Role: {subtask['role']} | Instruction: {subtask['instruction']}"
@@ -546,6 +551,11 @@ def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
                         f"rm -r {os.path.join(str(cfg.output_dir), f'{subtask_id}')}"
                     )
 
+                log_context.end_subtask(
+                    f"SUBGOAL {subtask_idx + 1}/{len(all_subtasks)} done "
+                    f"({subtask['role']}) -- success_by_distance={success_by_distance}"
+                )
+
             # save the results at the end of each episode
             logger.save_results()
 
@@ -572,9 +582,31 @@ if __name__ == "__main__":
         default=1,
         type=int,
     )
+    parser.add_argument(
+        "--prompt-version",
+        help="input prompt version (see src/prompts/); overrides cfg.prompt_version",
+        default=None,
+        type=str,
+    )
+    parser.add_argument(
+        "--list-prompt-versions",
+        help="print the registered prompt versions and exit",
+        action="store_true",
+    )
     args = parser.parse_args()
+
+    if args.list_prompt_versions:
+        print("Available prompt versions:")
+        print(prompts.describe())
+        raise SystemExit(0)
+
     cfg = OmegaConf.load(args.cfg_file)
     OmegaConf.resolve(cfg)
+
+    # CLI wins over the config file; fail here rather than on the first VLM call
+    if args.prompt_version:
+        cfg.prompt_version = args.prompt_version
+    prompt_version = prompts.get(cfg.get("prompt_version", None))
 
     # Set up logging
     cfg.output_dir = os.path.join(cfg.output_parent_dir, cfg.exp_name)
@@ -598,8 +630,9 @@ if __name__ == "__main__":
             minutes, seconds = divmod(remainder, 60)
             return f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
 
-    # Set up the logging format
-    formatter = ElapsedTimeFormatter(fmt="%(asctime)s - %(message)s")
+    # Set up the logging format. %(ctx)s is filled in by log_context's filter and shows
+    # which scene / episode / subgoal the line came from.
+    formatter = ElapsedTimeFormatter(fmt="%(asctime)s %(ctx)s %(message)s")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -614,6 +647,10 @@ if __name__ == "__main__":
     for handler in logging.getLogger().handlers:
         handler.setFormatter(formatter)
 
+    # must come after the handlers exist, so every record gets a `ctx` field
+    log_context.install()
+
     # run
     logging.info(f"***** Running {cfg.exp_name} *****")
+    logging.info(f"Prompt version: {prompt_version.name} ({prompt_version.description})")
     main(cfg, start_ratio=args.start_ratio, end_ratio=args.end_ratio, split=args.split)
