@@ -120,7 +120,7 @@ The evaluation prompts a vision-language model at each step. Two backends are su
 **Ollama (`VLM_PROVIDER = "ollama"`)**: runs a local vision model, no API key needed. Pull a vision model, then run the evaluation — the ollama server loads the model on the first request, nothing else to start:
 ```bash
 ollama pull qwen2.5vl:7b
-VLM_PROVIDER=ollama OLLAMA_MODEL=qwen2.5vl:7b python run_aeqa_evaluation.py -cf cfg/eval_aeqa.yaml
+`VLM_PROVIDER=ollama OLLAMA_MODEL=qwen2.5vl:7b` python run_aeqa_evaluation.py -cf cfg/eval_aeqa.yaml
 ```
 Relevant settings: `OLLAMA_END_POINT` (default `http://localhost:11434`), `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`.
 
