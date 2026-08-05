@@ -97,6 +97,7 @@ def get_step_info(step, verbose=False):
             use_full_obj_list,
             verbose=verbose,
             prompt_version=step.get("prompt_version"),
+            history=step.get("history"),
         )
         snapshot_full_imgs = {
             rgb_id: snapshot_full_imgs[rgb_id] for rgb_id in keep_index_snapshot.keys()
@@ -135,11 +136,15 @@ def format_prefiltering_prompt(*args, **kwargs):
 
 
 def get_prefiltering_classes(
-    question, seen_classes, top_k=10, image_goal=None, prompt_version=None
+    question, seen_classes, top_k=10, image_goal=None, prompt_version=None, history=None
 ):
     prompt_version = prompt_version or prompts.get()
     prefiltering_sys, prefiltering_content = prompt_version.format_prefiltering_prompt(
-        question, sorted(list(seen_classes)), top_k=top_k, image_goal=image_goal
+        question,
+        sorted(list(seen_classes)),
+        top_k=top_k,
+        image_goal=image_goal,
+        history=history,
     )
 
     message = ""
@@ -170,9 +175,15 @@ def prefiltering(
     use_full_obj_list=False,
     verbose=False,
     prompt_version=None,
+    history=None,
 ):
     selected_classes = get_prefiltering_classes(
-        question, seen_classes, top_k, image_goal, prompt_version=prompt_version
+        question,
+        seen_classes,
+        top_k,
+        image_goal,
+        prompt_version=prompt_version,
+        history=history,
     )
     if verbose:
         logging.info(f"Prefiltering selected classes: {selected_classes}")
@@ -226,6 +237,7 @@ def explore_step(step, cfg, verbose=False):
         egocentric_view=step.get("use_egocentric_views", False),
         use_snapshot_class=True,
         image_goal=image_goal,
+        history=step.get("history"),
     )
 
     if verbose:

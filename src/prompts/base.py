@@ -9,6 +9,15 @@ Both return ``(sys_prompt, content)``, where ``content`` is the list of tuples t
 VLM client expects: ``(text,)`` for text, ``(text, base64_png)`` to attach an image
 after that text. See src/vlm_client.py.
 
+``history`` is the list of subgoals already finished in this episode, oldest first::
+
+    [{"order": 1, "role": "S", "instruction": "Find the toilet.",
+      "found_class": "toilet", "arrived": True}, ...]
+
+``found_class`` is what the agent itself settled on, not the ground truth, so a version
+that shows it is not leaking the answer. It is None when the subgoal ended without
+committing to an object. Versions that do not need it simply ignore the argument.
+
 To add a version, subclass this (or DefaultPrompt, to change only one prompt), decorate
 with @register("<name>"), and import the module in src/prompts/__init__.py.
 """
@@ -31,10 +40,13 @@ class PromptVersion:
         egocentric_view=False,
         use_snapshot_class=True,
         image_goal=None,
+        history=None,
     ):
         raise NotImplementedError
 
-    def format_prefiltering_prompt(self, question, class_list, top_k=10, image_goal=None):
+    def format_prefiltering_prompt(
+        self, question, class_list, top_k=10, image_goal=None, history=None
+    ):
         raise NotImplementedError
 
     def __repr__(self):

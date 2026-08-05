@@ -24,6 +24,7 @@ class DefaultPrompt(PromptVersion):
         egocentric_view=False,
         use_snapshot_class=True,
         image_goal=None,
+        history=None,  # the baseline deliberately ignores it
     ):
         sys_prompt = "Task: You are an agent in an indoor scene that is able to observe the surroundings and explore the environment. You are tasked with indoor navigation, and you are required to choose either a Snapshot or a Frontier image to explore and find the target object required in the question.\n"
 
@@ -93,7 +94,9 @@ class DefaultPrompt(PromptVersion):
 
         return sys_prompt, content
 
-    def format_prefiltering_prompt(self, question, class_list, top_k=10, image_goal=None):
+    def format_prefiltering_prompt(
+        self, question, class_list, top_k=10, image_goal=None, history=None
+    ):
         content = []
         sys_prompt = "You are an AI agent in a 3D indoor scene.\n"
         prompt = "Your goal is to answer questions about the scene through exploration.\n"

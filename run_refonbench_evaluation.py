@@ -200,6 +200,11 @@ def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
 
             # run questions in the scene
             global_step = -1
+            # What the agent itself concluded in this episode's earlier subgoals, in
+            # order. RefON instructions refer back to it ("A1", "the 2nd one"), so the
+            # history-aware prompt versions need it; `default` ignores it. Reset per
+            # episode, since aliases and ordinals are scoped to one episode.
+            episode_history = []
             for subtask_idx, subtask in enumerate(all_subtasks):
                 subtask_id = f"{scene_id}_{episode_id}_{subtask_idx}"
                 log_context.set_subtask(
@@ -408,6 +413,7 @@ def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
                             rgb_egocentric_views=rgb_egocentric_views,
                             cfg=cfg,
                             verbose=True,
+                            history=episode_history,
                         )
                         if vlm_response is None:
                             logging.info(
@@ -551,9 +557,29 @@ def main(cfg, start_ratio=0.0, end_ratio=1.0, split=1):
                         f"rm -r {os.path.join(str(cfg.output_dir), f'{subtask_id}')}"
                     )
 
+                # Record what the agent concluded, for the next subgoals to refer back
+                # to. This is the agent's own choice, not the ground truth, so showing
+                # it in a prompt leaks nothing: if it picked the wrong object, later
+                # references resolve against that wrong object, which is the point.
+                found_class = None
+                if type(max_point_choice) == SnapShot and max_point_choice.cluster:
+                    found_obj_id = max_point_choice.cluster[0]
+                    if found_obj_id in scene.objects:
+                        found_class = scene.objects[found_obj_id]["class_name"]
+                episode_history.append(
+                    {
+                        "order": subtask_idx + 1,
+                        "role": subtask["role"],
+                        "instruction": subtask["instruction"],
+                        "found_class": found_class,
+                        "arrived": bool(task_success),
+                    }
+                )
+
                 log_context.end_subtask(
                     f"SUBGOAL {subtask_idx + 1}/{len(all_subtasks)} done "
-                    f"({subtask['role']}) -- success_by_distance={success_by_distance}"
+                    f"({subtask['role']}) -- success_by_distance={success_by_distance} "
+                    f"found={found_class}"
                 )
 
             # save the results at the end of each episode

@@ -16,6 +16,7 @@ def query_vlm_for_response(
     rgb_egocentric_views: list,
     cfg,
     verbose: bool = False,
+    history: Optional[list] = None,
 ) -> Optional[Tuple[Union[SnapShot, Frontier], int]]:
     # prepare input for vlm
     step_dict = {}
@@ -89,6 +90,9 @@ def query_vlm_for_response(
         step_dict["use_egocentric_views"] = True
 
     # prepare other metadata
+    # the subgoals already finished in this episode; only the prompt versions that ask
+    # for it use this (see src/prompts/history_included.py)
+    step_dict["history"] = history or []
     step_dict["question"] = subtask_metadata["question"]
     step_dict["task_type"] = subtask_metadata["task_type"]
     step_dict["class"] = subtask_metadata["class"]
