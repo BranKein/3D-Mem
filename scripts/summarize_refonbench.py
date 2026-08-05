@@ -38,9 +38,26 @@ ROLE_ORDER = [
     "AB_pre+OR_post",
 ]
 
+# Roles folded into "S" before aggregating, because the *_pre subgoals name their target
+# outright ("Find the clothes. Let's call it A1.") -- the alias they bind only matters to
+# the *_post subgoal that refers back to it, so as a navigation task they are the same
+# thing as a plain S. Pass --no-merge-roles to report them separately.
+#
+# AB_pre+OR_post deliberately stays out: it binds an alias *and* refers back
+# ("Find the 1st one again. Let's call it A1."), so it cannot be resolved without the
+# history and folding it in would inflate S with anaphoric cases.
+ROLE_MERGE = {
+    "AB_pre": "S",
+    "AR_pre": "S",
+}
+
 
 def _mean(xs):
     return sum(xs) / len(xs) if xs else float("nan")
+
+
+def _merge_role(role, merge=True):
+    return ROLE_MERGE.get(role, role) if merge else role
 
 
 def _sort_roles(roles):
@@ -52,22 +69,24 @@ def _sort_roles(roles):
 # --------------------------------------------------------------------------- #
 # sources
 # --------------------------------------------------------------------------- #
-def from_pickles(results_dir):
+def from_pickles(results_dir, merge=True):
     """Merge every split's *_by_task_*.pkl. Returns (per_role, overall) or None."""
     succ_files = sorted(glob.glob(os.path.join(results_dir, "success_by_task_*.pkl")))
     spl_files = sorted(glob.glob(os.path.join(results_dir, "spl_by_task_*.pkl")))
     if not succ_files or not spl_files:
         return None
 
+    # The pkls hold the raw per-subtask values, so folding roles together is just
+    # concatenation -- no re-weighting needed and no precision lost.
     success, spl = defaultdict(list), defaultdict(list)
     for path in succ_files:
         with open(path, "rb") as f:
             for role, values in pickle.load(f).items():
-                success[role].extend(values)
+                success[_merge_role(role, merge)].extend(values)
     for path in spl_files:
         with open(path, "rb") as f:
             for role, values in pickle.load(f).items():
-                spl[role].extend(values)
+                spl[_merge_role(role, merge)].extend(values)
 
     per_role = {}
     for role in set(success) | set(spl):
@@ -102,7 +121,7 @@ _SPL_ROLE = re.compile(r"SPL for (\S+):\s*([\d.]+)")
 _OVERALL = re.compile(r"(Success rate|SPL) by (snapshot|distance):\s*([\d.]+)")
 
 
-def from_logs(results_dir):
+def from_logs(results_dir, merge=True):
     """Recover the running averages from the run log. Returns (per_role, overall)."""
     logs = sorted(glob.glob(os.path.join(results_dir, "log_*.log")))
     if not logs:
@@ -132,23 +151,37 @@ def from_logs(results_dir):
 
     if not sr and not spl:
         return None
+
+    # Only the final running mean survives in the log, not the individual values, so
+    # folding roles has to re-weight by each role's sample count.
+    merged = defaultdict(lambda: {"n": 0, "sr_sum": 0.0, "spl_sum": 0.0})
+    for role in set(sr) | set(spl):
+        n = counts.get(role, 0)
+        target = merged[_merge_role(role, merge)]
+        target["n"] += n
+        # the log prints percentages; normalise to the pkl's 0-1 scale
+        target["sr_sum"] += sr.get(role, 0.0) / 100.0 * n
+        target["spl_sum"] += spl.get(role, 0.0) / 100.0 * n
+
     per_role = {
         role: {
-            "n": counts.get(role, 0),
-            # the log prints percentages; normalise to the pkl's 0-1 scale
-            "sr": sr.get(role, float("nan")) / 100.0,
-            "spl": spl.get(role, float("nan")) / 100.0,
+            "n": acc["n"],
+            "sr": acc["sr_sum"] / acc["n"] if acc["n"] else float("nan"),
+            "spl": acc["spl_sum"] / acc["n"] if acc["n"] else float("nan"),
         }
-        for role in set(sr) | set(spl)
+        for role, acc in merged.items()
     }
     return per_role, overall
 
 
 # --------------------------------------------------------------------------- #
-def render(per_role, overall, source, results_dir):
+def render(per_role, overall, source, results_dir, merge=True):
     lines = []
     lines.append(f"RefON-Bench summary  ({results_dir})")
     lines.append(f"source: {source}")
+    if merge:
+        folded = ", ".join(sorted(ROLE_MERGE))
+        lines.append(f"roles folded into S: {folded}   (--no-merge-roles to separate)")
     lines.append("")
     lines.append(f"{'role':<16}{'N':>6}{'SR %':>10}{'SPL %':>10}")
     lines.append("-" * 42)
@@ -196,17 +229,23 @@ def main():
         action="store_true",
         help="ignore pickles and read the log (running averages of an in-flight run)",
     )
+    ap.add_argument(
+        "--no-merge-roles",
+        action="store_true",
+        help=f"report every role separately instead of folding {sorted(ROLE_MERGE)} into S",
+    )
     args = ap.parse_args()
+    merge = not args.no_merge_roles
 
     if not os.path.isdir(args.results_dir):
         sys.exit(f"no such directory: {args.results_dir}")
 
     result, source = None, None
     if not args.from_log:
-        result = from_pickles(args.results_dir)
+        result = from_pickles(args.results_dir, merge=merge)
         source = "pickles (success_by_task / spl_by_task)"
     if result is None:
-        result = from_logs(args.results_dir)
+        result = from_logs(args.results_dir, merge=merge)
         source = "log (no completed episode yet)"
     if result is None:
         sys.exit(
@@ -215,7 +254,7 @@ def main():
         )
 
     per_role, overall = result
-    print(render(per_role, overall, source, args.results_dir))
+    print(render(per_role, overall, source, args.results_dir, merge=merge))
 
     if args.csv:
         with open(args.csv, "w") as f:
