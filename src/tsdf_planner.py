@@ -752,10 +752,17 @@ class TSDFPlanner(TSDFPlannerBase):
 
             for key, snapshot in snapshots.items():
                 obs_point = snapshot.obs_point[:2]
+                # Objects merged away by periodic_cleanup_objects are gone from
+                # `objects` while the snapshot still lists them; drop those instead of
+                # raising, and skip the snapshot entirely if nothing is left to draw
+                # (np.mean of an empty list would poison the wedge geometry with nan).
                 obj_points = [
                     self.habitat2voxel(objects[obj_id]["bbox"].center)[:2]
                     for obj_id in snapshot.cluster
+                    if obj_id in objects
                 ]
+                if len(obj_points) == 0:
+                    continue
                 obj_center = np.mean(obj_points, axis=0)
                 view_direction = obj_center - obs_point
                 center_angle = (
@@ -805,12 +812,22 @@ class TSDFPlanner(TSDFPlannerBase):
 
                 ax1.add_patch(wedge)
 
+                # A cluster can name an object that periodic_cleanup_objects has since
+                # merged away, so it is no longer in `objects`. This is drawing only --
+                # skip the point rather than taking the whole run down with a KeyError.
                 for obj_id in snapshot.cluster:
+                    if obj_id not in objects:
+                        continue
                     obj_vox = self.habitat2voxel(objects[obj_id]["bbox"].center)
                     ax1.scatter(obj_vox[1], obj_vox[0], color=snapshot.color, s=30)
 
             if type(self.max_point) == SnapShot:
+                # Same here, and more likely: max_point is the snapshot the VLM chose,
+                # and its cluster keeps the object id from that step while the agent
+                # spends the following steps navigating to it.
                 for obj_id in self.max_point.cluster:
+                    if obj_id not in objects:
+                        continue
                     obj_vox = self.habitat2voxel(objects[obj_id]["bbox"].center)
                     ax1.scatter(obj_vox[1], obj_vox[0], color="r", s=30)
 
