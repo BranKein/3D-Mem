@@ -368,8 +368,8 @@ Before asking whether the agent can *navigate* to a referent, it is worth knowin
 whether the referent is recoverable from the instructions at all. That is what
 `run_refonbench_feasibility.py` measures: no habitat, no images, no navigation — the VLM
 sees only the episode's instructions and answers, for one of them, *which object it is
-being sent to* (`"new"`, the number of the instruction that introduced the object, or
-`"none"`).
+being sent to* — as the number of the instruction that first mentioned that object (its
+own number when it is the first, `0` when it names no object).
 
 ```bash
 python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml
@@ -388,8 +388,21 @@ python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml --
 - **`GA_*` subtasks are scored here**, unlike in the navigation runner: "refers to no
   object" is a perfectly checkable answer even though "stop" is not a reachable target.
   `--skip-goal-absent` drops them.
-- Output: `feasibility_records_<mode>.jsonl` (one row per subgoal, with the raw model
-  reply) and `feasibility_results_<mode>.json` under `results/<exp_name>/`.
+- Output under `results/<exp_name>/`: `feasibility_records_<mode>.jsonl` (one row per
+  subgoal, with the raw model reply), `feasibility_results_<mode>.json`, and
+  `feasibility_failures_<mode>.log` — the full exchange (system prompt, user prompt,
+  reply) for every wrong answer, grouped so one `all_at_once` reply that got three
+  subgoals wrong is one transcript rather than three copies.
+
+The answer is a label (`new` / `back_reference` / `no_object`) plus a number only when
+the label is `back_reference`. That split is not cosmetic. Asked for a bare instruction
+number, qwen2.5vl:7b pointed at some earlier instruction for 231 of 534 fresh objects;
+offered `"new"` as one of the values that same field could take, it answered `"new"` for
+373 back-references, 279 of which still named the true referent's category. Whichever
+single field carries both decisions, one class gets swallowed. Classifying first and
+numbering second keeps the two apart — but see the caveat below: on a 7B model the
+headline SR still moves by tens of points with the phrasing, so a feasibility number is
+only comparable against navigation numbers taken with the *same* prompt version.
 
 ### auxiliary — `validate` / `plot`
 

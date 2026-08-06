@@ -95,23 +95,32 @@ SYS_PROMPT = (
     "the most recent one itself.\n"
     "\"Let's call it X\" binds the name X to the object being found by that very "
     "instruction; it is not a request to search for something called X.\n"
-    "An alias that was never bound refers to no object at all.\n"
+    "An alias that was never bound refers to no object at all, and neither does an "
+    "ordinal that points past the instructions given so far.\n"
     "You are not navigating and you cannot see the house. Your only job is to work out "
     "which object each instruction is talking about, from the instructions themselves.\n"
     "Answer with JSON only. No prose, no markdown fences."
 )
 
 _ANSWER_FIELDS = (
-    '  "refers_to": which object the instruction sends the robot to.\n'
-    '      "new"  -- the instruction introduces an object no earlier instruction '
-    "mentioned;\n"
-    "      <number> -- the instruction sends the robot back to the object of an "
-    "earlier instruction; give that instruction's number;\n"
-    '      "none" -- the instruction refers to no object at all.\n'
+    '  "answer": exactly one of\n'
+    '      "new"            -- no earlier instruction went to this object; the '
+    "instruction names a fresh one.\n"
+    '      "back_reference" -- an earlier instruction already went to this same object.\n'
+    '      "no_object"      -- the instruction points at nothing (an alias that was '
+    "never bound, an ordinal past the end of the list).\n"
+    '  "refers_to": only when "answer" is "back_reference" -- the number of the earlier '
+    "instruction that went to the object. null otherwise.\n"
     '  "category": the object category as a short noun phrase ("toilet", "cardboard '
-    'box"). Always name it -- for a back-reference, repeat the category the earlier '
-    "instruction used. Only \"none\" answers may leave it null.\n"
+    'box"). Always name it -- for a back reference, repeat the category the earlier '
+    'instruction used. Only "no_object" may leave it null.\n'
     '  "reason": one short sentence.\n'
+)
+
+_ANSWER_SCHEMA = (
+    '{"answer": "new" | "back_reference" | "no_object", '
+    '"refers_to": <integer 1..%d or null>, '
+    '"category": <string or null>, "reason": <string>}'
 )
 
 
@@ -129,10 +138,11 @@ def build_incremental_prompt(instructions: List[str], index: int) -> List[Tuple]
         "Instructions given to the robot so far, in order:\n"
         + _numbered(instructions, n)
         + "\n\n"
-        + f"Question: which object does instruction {n} tell the robot to find?\n\n"
+        + f"Question: instruction {n} sends the robot to one object. Is that object one "
+        f"an earlier instruction already went to, or a new one?\n\n"
         + "Reply with a single JSON object:\n"
-        + '{"refers_to": "new" | <integer 1..%d> | "none", "category": <string or null>, '
-        '"reason": <string>}\n' % n
+        + (_ANSWER_SCHEMA % n)
+        + "\n"
         + _ANSWER_FIELDS
     )
     return [(text,)]
@@ -145,12 +155,14 @@ def build_all_at_once_prompt(instructions: List[str]) -> List[Tuple]:
         "The robot is given these instructions, in order:\n"
         + _numbered(instructions)
         + "\n\n"
-        + f"Question: for each of the {n} instructions, which object does it tell the "
-        "robot to find?\n\n"
+        + f"Question: each of the {n} instructions sends the robot to one object. For "
+        "each one, is that object one an earlier instruction already went to, or a new "
+        "one?\n\n"
         + "Reply with a single JSON array of exactly "
         + f"{n} objects, one per instruction, in order:\n"
-        + '[{"instruction": 1, "refers_to": "new" | <integer 1..%d> | "none", '
-        '"category": <string or null>, "reason": <string>}, ...]\n' % n
+        + '[{"instruction": 1, '
+        + (_ANSWER_SCHEMA % n).lstrip("{")
+        + ", ...]\n"
         + _ANSWER_FIELDS
     )
     return [(text,)]
@@ -164,11 +176,27 @@ def build_all_at_once_prompt(instructions: List[str]) -> List[Tuple]:
 def ground_truth_refers_to(subtasks: List[Dict], index: int) -> int:
     """1-based number of the earliest instruction that mentions subtask `index`'s object.
 
-    0 for a goal-absent subtask, which names no object.
+    0 when the instruction refers to no object, and ``index + 1`` ("new") when it
+    introduces one.
+
+    The three goal-absent kinds are not the same question here, because this probe reads
+    the instructions and nothing else:
+
+      GA_unbound_alias   "Find Z1."              -> 0. The alias was never bound, and the
+                                                   text says so.
+      GA_invalid_ordinal "Find the 8th one again." with 6 prior visits
+                                                 -> 0. Out of range, and the text says so.
+      GA_absent_object   "Find the chandelier."  -> "new". It is goal-absent because the
+                                                   *scene* holds no chandelier, which is
+                                                   not knowable from the instructions.
+                                                   Demanding "none" would score a fact
+                                                   the model was never given.
+
+    The first two carry no category; the third does, which is what distinguishes them.
     """
     subtask = subtasks[index]
     if subtask.get("goal_absent") or subtask.get("object_id") is None:
-        return 0
+        return index + 1 if subtask.get("category") else 0
     object_id = subtask["object_id"]
     for i in range(index + 1):
         if subtasks[i].get("object_id") == object_id:
@@ -176,9 +204,15 @@ def ground_truth_refers_to(subtasks: List[Dict], index: int) -> int:
     return index + 1  # unreachable: the subtask itself matches
 
 
-def referent_object_id(subtasks: List[Dict], answer: Optional[int]) -> Optional[str]:
-    """The object a predicted instruction number points at, or None if it points nowhere."""
-    if answer is None or answer <= 0 or answer > len(subtasks):
+def referent_object_id(
+    subtasks: List[Dict], answer: Optional[int], max_index: Optional[int] = None
+) -> Optional[str]:
+    """The object a predicted instruction number points at, or None if it points nowhere.
+
+    ``max_index`` caps which instructions may be pointed at (1-based, inclusive).
+    """
+    limit = len(subtasks) if max_index is None else min(max_index, len(subtasks))
+    if answer is None or answer <= 0 or answer > limit:
         return None
     return subtasks[answer - 1].get("object_id")
 
@@ -215,15 +249,7 @@ def _singular(word: str) -> str:
 
 
 def parse_refers_to(value, index: int) -> Optional[int]:
-    """Answer -> instruction number (1-based), 0 for "no object", None if unusable.
-
-    The model may answer with a number, with "new" (this instruction introduces the
-    object, i.e. its own number), or with "none"/null. "new" exists because asking for
-    "its own number" is an index convention that models get wrong while reasoning
-    correctly -- qwen2.5vl:7b answered 1 for instruction 2 while explaining that the
-    instruction "directly names and binds a new object". That is a formatting slip, not
-    a failure to resolve a reference, and it should not be scored as one.
-    """
+    """A ``refers_to`` value -> instruction number (1-based), 0 for "none", None if unusable."""
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -245,32 +271,73 @@ def parse_refers_to(value, index: int) -> Optional[int]:
     return None
 
 
+def resolve_answer(pred: Dict, index: int) -> Optional[int]:
+    """The ("answer", "refers_to") pair -> one instruction number, in ground-truth terms.
+
+    ``index + 1`` for "new", 0 for "no_object", and the given number for
+    "back_reference". The two fields are asked separately on purpose: when the model was
+    asked for a bare number, it defaulted to pointing at some earlier instruction (231 of
+    534 fresh objects were answered with an earlier number, the reason line often naming
+    the right one); when "new" was one of the values that field could take, it defaulted
+    the other way (373 back-references answered "new", 279 of them still naming the true
+    referent's category). Classifying first, then numbering, stops either default from
+    swallowing the other case.
+    """
+    label = pred.get("answer")
+    label = label.strip().strip('"').lower() if isinstance(label, str) else ""
+
+    if label.startswith("no_object") or label in ("none", "no object", "nothing"):
+        return 0
+    if label.startswith("new"):
+        return index + 1
+    if label.startswith("back"):
+        # a back reference with no usable number resolves nowhere, which is a wrong
+        # answer rather than an unparseable one -- the model did commit to a claim
+        return parse_refers_to(pred.get("refers_to"), index)
+
+    # no (or unrecognised) label: fall back to whatever refers_to holds, so a reply that
+    # ignored the schema is still scored on what it did say
+    return parse_refers_to(pred.get("refers_to"), index)
+
+
 def score_prediction(subtasks: List[Dict], index: int, pred: Dict) -> Dict:
     """Compare one parsed answer against the dataset."""
     gt_refers_to = ground_truth_refers_to(subtasks, index)
     gt_object_id = subtasks[index].get("object_id")
     gt_category = subtasks[index].get("category")
 
-    pred_refers_to = parse_refers_to(pred.get("refers_to"), index)
+    pred_refers_to = resolve_answer(pred, index)
 
-    if gt_object_id is None:
-        # goal-absent: the only right answer is "no object"
+    # the category question is the same whatever the referent is: name the object
+    category_correct = normalize_category(pred.get("category")) == normalize_category(
+        gt_category
+    )
+
+    if gt_refers_to == 0:
+        # refers to nothing (unbound alias / out-of-range ordinal)
         referent_correct = pred_refers_to == 0
-        category_correct = normalize_category(pred.get("category")) is None
+    elif gt_refers_to == index + 1:
+        # the instruction introduces the object, so "new" (= its own number) is the
+        # only right answer
+        referent_correct = pred_refers_to == index + 1
     else:
-        # any instruction number that lands on the same object counts: an episode can
-        # visit one object several times, and "the 3rd one" and "the 2nd one" are then
-        # both true statements about the same referent
-        referent_correct = referent_object_id(subtasks, pred_refers_to) == gt_object_id
-        category_correct = normalize_category(
-            pred.get("category")
-        ) == normalize_category(gt_category)
+        # a back-reference: any EARLIER instruction that lands on the same object counts,
+        # because an episode can visit one object several times and "the 3rd one" and
+        # "the 2nd one" are then both true statements about the same referent. The
+        # subgoal's own number is excluded on purpose -- it trivially carries the right
+        # object_id, so counting it would score "this is a new object" as a correct
+        # resolution of a back-reference.
+        referent_correct = (
+            referent_object_id(subtasks, pred_refers_to, max_index=index)
+            == gt_object_id
+        )
 
     return {
         "gt_refers_to": gt_refers_to,
         "gt_object_id": gt_object_id,
         "gt_category": gt_category,
         "pred_refers_to": pred_refers_to,
+        "pred_answer": pred.get("answer"),
         "pred_refers_to_raw": pred.get("refers_to"),
         "pred_category": pred.get("category"),
         "reason": pred.get("reason"),
@@ -333,9 +400,15 @@ def parse_single_answer(response: Optional[str]) -> Optional[Dict]:
     if isinstance(obj, dict):
         return obj
     # a model that ignored the format but still wrote an answer is worth recovering
-    match = re.search(r"refers_to[\"'\s:=]*[\"']?(new|none|\d+)", text, flags=re.I)
-    if match:
-        return {"refers_to": match.group(1), "category": None, "reason": text[:200]}
+    label = re.search(r"answer[\"'\s:=]*[\"']?(new|back_reference|no_object)", text, flags=re.I)
+    number = re.search(r"refers_to[\"'\s:=]*[\"']?(new|none|\d+)", text, flags=re.I)
+    if label or number:
+        return {
+            "answer": label.group(1) if label else None,
+            "refers_to": number.group(1) if number else None,
+            "category": None,
+            "reason": text[:200],
+        }
     return None
 
 
@@ -504,27 +577,83 @@ def run_query(query: Dict, client, mode: str) -> List[Dict]:
         answer = parse_single_answer(response)
         answers = {indices[0]: answer}
 
+    prompt = "\n".join(c[0] for c in query["contents"])
+
     records = []
     for i in indices:
         answer = answers.get(i)
         parse_failed = not answer
         scoring = score_prediction(subtasks, i, answer or {})
-        records.append(
-            {
-                "scene": query["scene"],
-                "episode_id": query["episode_id"],
-                "order": subtasks[i].get("order", i + 1),
-                "role": subtasks[i]["role"],
-                "instruction": subtasks[i]["instruction"],
-                "goal_absent": bool(subtasks[i].get("goal_absent")),
-                "mode": mode,
-                "parse_failed": parse_failed,
-                "raw_response": response,
-                "elapsed": elapsed,
-                **scoring,
-            }
-        )
+        record = {
+            "scene": query["scene"],
+            "episode_id": query["episode_id"],
+            "order": subtasks[i].get("order", i + 1),
+            "role": subtasks[i]["role"],
+            "instruction": subtasks[i]["instruction"],
+            "goal_absent": bool(subtasks[i].get("goal_absent")),
+            "mode": mode,
+            "parse_failed": parse_failed,
+            "raw_response": response,
+            "elapsed": elapsed,
+            **scoring,
+        }
+        # The prompt is what makes a failure diagnosable -- which history the model had
+        # in front of it when it picked the wrong referent. It is also the bulk of the
+        # record and identical for every correct answer, so it is kept only on failures.
+        if not record["correct"]:
+            record["prompt"] = prompt
+        records.append(record)
     return records
+
+
+def write_failure_transcripts(records: List[Dict], path: str) -> int:
+    """Write the full exchange for every wrong answer. Returns the transcript count.
+
+    Failures are grouped by the prompt that produced them, so an ``all_at_once`` episode
+    whose single reply got three subgoals wrong is one transcript listing all three
+    rather than three copies of the same conversation.
+    """
+    groups: Dict[Tuple, List[Dict]] = {}
+    for r in records:
+        if r["correct"]:
+            continue
+        key = (r["scene"], r["episode_id"], r.get("prompt"))
+        groups.setdefault(key, []).append(r)
+
+    with open(path, "w") as f:
+        f.write(f"# {len(groups)} failed exchange(s)\n")
+        f.write("# system prompt (identical for every exchange below)\n\n")
+        f.write(SYS_PROMPT + "\n")
+        for (scene, episode_id, prompt), items in groups.items():
+            first = items[0]
+            f.write("\n" + "=" * 78 + "\n")
+            f.write(f"scene {scene} / episode {episode_id} / mode {first['mode']}\n")
+            for r in items:
+                f.write(
+                    f"  WRONG subgoal #{r['order']} ({r['role']}) "
+                    f"\"{r['instruction']}\"\n"
+                    f"      predicted: {r.get('pred_answer')!r} / refers_to="
+                    f"{r['pred_refers_to_raw']!r} -> instruction {r['pred_refers_to']}, "
+                    f"category={r['pred_category']!r}\n"
+                    f"      truth    : refers_to={r['gt_refers_to']} "
+                    f"object_id={r['gt_object_id']!r} category={r['gt_category']!r}\n"
+                    f"      wrong    : "
+                    + ", ".join(
+                        part
+                        for part, ok in (
+                            ("referent", r["referent_correct"]),
+                            ("category", r["category_correct"]),
+                        )
+                        if not ok
+                    )
+                    + (" (reply could not be parsed)" if r["parse_failed"] else "")
+                    + "\n"
+                )
+            f.write("\n--- USER ---\n")
+            f.write((prompt or "(prompt not recorded)").rstrip() + "\n")
+            f.write("\n--- ASSISTANT ---\n")
+            f.write((first["raw_response"] or "(no response: every retry failed)").rstrip() + "\n")
+    return len(groups)
 
 
 def main(cfg, mode: str, dry_run: bool = False):
@@ -585,9 +714,13 @@ def main(cfg, mode: str, dry_run: bool = False):
             indent=2,
         )
 
+    failures_path = os.path.join(cfg.output_dir, f"feasibility_failures_{mode}.log")
+    num_failed = write_failure_transcripts(records, failures_path)
+
     logging.info("\n" + format_table(summary))
     logging.info(f"Per-subgoal records: {records_path}")
     logging.info(f"Summary: {results_path}")
+    logging.info(f"Failed exchanges ({num_failed} transcript(s)): {failures_path}")
 
 
 if __name__ == "__main__":
