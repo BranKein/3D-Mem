@@ -32,6 +32,10 @@ def list_shard_files(test_data_dir: str) -> List[str]:
             continue
         if not (name.endswith(".json") or name.endswith(".json.gz")):
             continue
+        # the generator writes each shard through a `<shard>/` scratch directory, which
+        # can survive an interrupted build and matches the name filter above
+        if not os.path.isfile(os.path.join(test_data_dir, name)):
+            continue
         files.append(name)
     return sorted(files)
 

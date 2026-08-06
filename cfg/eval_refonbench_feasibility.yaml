@@ -1,0 +1,41 @@
+# Text-only feasibility probe for RefON instructions (run_refonbench_feasibility.py).
+# No habitat, no scene meshes, no images: the VLM only sees the instructions and has to
+# say which object each one refers to. Hence none of the navigation / perception /
+# TSDF settings of eval_refonbench_default.yaml are needed here.
+
+# General
+seed: 77
+exp_name: "exp_feasibility_refonbench"
+output_parent_dir: "results"
+
+# RefONEpisodeGenerator output: <dataset_root>/<split>/content/, .json or .json.gz.
+test_data_dir: "RefONEpisodeGenerator/out/refon_example_dataset/v1/val/content/"
+
+# null/0 means "use every episode of every shard".
+episodes_per_scene: null
+
+# incremental : one query per subgoal, showing instructions 1..i (what the navigation
+#               run actually has at subgoal i)
+# all_at_once : one query per episode, showing all instructions at once (look-ahead
+#               allowed, so an upper bound on the same skill)
+mode: "incremental"
+
+# GA_* subtasks name no object. The navigation runner drops them because it cannot
+# score "stop"; here the right answer is simply "refers to no object", so they are
+# scored by default. --skip-goal-absent turns them off.
+include_goal_absent: true
+
+# Reference resolution is not a creative task -- keep sampling off so re-runs match.
+temperature: 0.0
+
+# scripts/summarize_refonbench.py folds AB_pre / AR_pre into S, because as a navigation
+# task they are a plain "go to this object". Resolving them is not the same job (the
+# model must still see that "Let's call it A1" binds a name rather than naming a target),
+# so they are reported separately here unless this is turned on.
+merge_roles: false
+
+# Prompts are independent of each other, so calls can be issued in parallel.
+workers: 1
+
+# how many prompts --dry-run prints
+dry_run_examples: 3

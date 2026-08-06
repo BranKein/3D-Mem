@@ -328,6 +328,35 @@ verbatim as its prompt but no history of earlier subtasks, so back references
 ("Find A1.", "Go back to the previous one.") are under-specified from its point of view.
 That is a prompt-construction problem, not a data-format one.
 
+### instruction feasibility — `run_refonbench_feasibility.py`
+
+Before asking whether the agent can *navigate* to a referent, it is worth knowing
+whether the referent is recoverable from the instructions at all. That is what
+`run_refonbench_feasibility.py` measures: no habitat, no images, no navigation — the VLM
+sees only the episode's instructions and answers, for one of them, *which object it is
+being sent to* (`"new"`, the number of the instruction that introduced the object, or
+`"none"`).
+
+```bash
+python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml
+python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml --mode all_at_once
+python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml --dry-run
+```
+
+- **`--mode incremental`** (default) sends one query per subgoal showing instructions
+  1..i — the history a navigation run actually has at subgoal i. **`--mode all_at_once`**
+  sends the whole episode in one query, so the model may look ahead.
+- An answer is scored **correct** when it points at the ground-truth object *and* names
+  its category. Any instruction number that lands on the same `object_id` counts: an
+  episode may revisit one object several times, and then "the 2nd one" and "the 3rd one"
+  are both true of the same referent. Results are broken down by instruction style
+  (`role`), with `referent SR` / `category SR` / joint `SR` reported separately.
+- **`GA_*` subtasks are scored here**, unlike in the navigation runner: "refers to no
+  object" is a perfectly checkable answer even though "stop" is not a reachable target.
+  `--skip-goal-absent` drops them.
+- Output: `feasibility_records_<mode>.jsonl` (one row per subgoal, with the raw model
+  reply) and `feasibility_results_<mode>.json` under `results/<exp_name>/`.
+
 ### auxiliary — `validate` / `plot`
 
 ```bash
