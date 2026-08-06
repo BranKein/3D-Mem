@@ -605,6 +605,10 @@ def run_query(query: Dict, client, mode: str) -> List[Dict]:
             "goal_absent": bool(subtasks[i].get("goal_absent")),
             "mode": mode,
             "parse_failed": parse_failed,
+            # no reply at all, as opposed to a reply that could not be parsed. A
+            # reasoning model that overruns max_tokens returns empty content, which is a
+            # budget problem to fix rather than an answer to score -- keep it separable.
+            "empty_response": not response,
             "raw_response": response,
             "elapsed": elapsed,
             **scoring,
@@ -683,7 +687,10 @@ def main(cfg, mode: str, dry_run: bool = False):
         logging.info("Dry run: no VLM was queried.")
         return
 
-    client = create_vlm_client(temperature=cfg.get("temperature", 0.0))
+    client = create_vlm_client(
+        temperature=cfg.get("temperature", 0.0),
+        max_tokens=cfg.get("max_tokens", 16384),
+    )
 
     records: List[Dict] = []
     workers = max(int(cfg.get("workers", 1)), 1)
@@ -728,6 +735,15 @@ def main(cfg, mode: str, dry_run: bool = False):
 
     failures_path = os.path.join(cfg.output_dir, f"feasibility_failures_{mode}.log")
     num_failed = write_failure_transcripts(records, failures_path)
+
+    empty = sum(1 for r in records if r.get("empty_response"))
+    if empty:
+        logging.warning(
+            f"WARNING: {empty}/{len(records)} subgoals got no reply at all. These score "
+            f"as wrong but measure nothing. A reasoning model that overruns max_tokens "
+            f"(currently {getattr(client, 'max_tokens', '?')}) returns empty content -- "
+            f"raise cfg.max_tokens and re-run before reading the table below."
+        )
 
     logging.info("\n" + format_table(summary))
     logging.info(f"Per-subgoal records: {records_path}")

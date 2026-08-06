@@ -41,6 +41,7 @@ class VLMClient(ABC):
         max_tries: int = 5,
         rate_limit_wait: float = 30,
         error_wait: float = 60,
+        empty_response_wait: float = 2,
         temperature: float = 0.7,
         max_tokens: int = 4096,
         top_p: float = 0.95,
@@ -49,6 +50,7 @@ class VLMClient(ABC):
         self.max_tries = max_tries
         self.rate_limit_wait = rate_limit_wait
         self.error_wait = error_wait
+        self.empty_response_wait = empty_response_wait
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.top_p = top_p
@@ -58,7 +60,19 @@ class VLMClient(ABC):
         retry_count = 0
         while retry_count < self.max_tries:
             try:
-                return self._chat(sys_prompt, contents)
+                response = self._chat(sys_prompt, contents)
+                # An empty body is not an answer. A reasoning model that spends its whole
+                # token budget thinking returns content="" with no exception raised, and
+                # the caller can only score that as a wrong answer -- so retry it like
+                # any other failed try instead of passing the blank through. Observed
+                # sporadically with gemma4:26b (12 of 200 prompts, unrelated to prompt
+                # length); a plain retry is usually enough.
+                if response is not None and not str(response).strip():
+                    print("Empty response from the model, retrying")
+                    time.sleep(self.empty_response_wait)
+                    retry_count += 1
+                    continue
+                return response
             except Exception as e:
                 wait = self.error_wait
                 if self._is_rate_limit_error(e):

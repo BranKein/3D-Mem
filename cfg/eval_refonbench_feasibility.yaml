@@ -38,6 +38,13 @@ include_goal_absent: true
 # Reference resolution is not a creative task -- keep sampling off so re-runs match.
 temperature: 0.0
 
+# Reasoning models spend the token budget before they answer. gemma4:26b puts its chain
+# of thought in message.reasoning and leaves content empty when it runs out: at the
+# client default of 4096 it returned nothing at all for 61 of 200 all_at_once episodes
+# (finish_reason "length", 4096 completion tokens, empty content), which the scorer can
+# only read as a wrong answer. 16384 is enough for a length-8 episode with room to spare.
+max_tokens: 16384
+
 # scripts/summarize_refonbench.py folds AB_pre / AR_pre into S, because as a navigation
 # task they are a plain "go to this object". Resolving them is not the same job (the
 # model must still see that "Let's call it A1" binds a name rather than naming a target),
