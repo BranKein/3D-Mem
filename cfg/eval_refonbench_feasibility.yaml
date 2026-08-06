@@ -9,6 +9,10 @@ exp_name: "exp_feasibility_refonbench"
 output_parent_dir: "results"
 
 # RefONEpisodeGenerator output: <dataset_root>/<split>/content/, .json or .json.gz.
+# The 200-episode style-balanced set on the same scene (built from
+# configs/generator.example_even.json) lives at
+#   RefONEpisodeGenerator/out/refon_example_even_dataset/v1/val/content/
+# and is the one to use when the per-style SRs need comparable sample counts.
 test_data_dir: "RefONEpisodeGenerator/out/refon_example_dataset/v1/val/content/"
 
 # null/0 means "use every episode of every shard".

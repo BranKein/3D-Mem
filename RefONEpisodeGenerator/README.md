@@ -288,6 +288,40 @@ builder and the evaluator load the scene through the identical file.
 > the goal pool fast: `0.001` → 32% usable, `0.005` → 20%, `0.05` → 8%. `0.005` is the
 > working default.
 
+##### 200 episodes with the instruction styles balanced
+
+30 episodes on one scene leaves some styles with a handful of samples, so a per-style SR
+is mostly noise. `configs/generator.example_even.json` builds a 200-episode set on the
+same scene with every style at a comparable count:
+
+```bash
+python RefONEpisodeGenerator/main.py generate \
+    -o RefONEpisodeGenerator/out/refon_example_even \
+    --config RefONEpisodeGenerator/configs/generator.example_even.json
+python RefONEpisodeGenerator/main.py build \
+    -i RefONEpisodeGenerator/out/refon_example_even --scenes GLAQ4DNUx5U \
+    --builder-config RefONEpisodeGenerator/configs/builder.3dmem_example_even.json
+```
+
+Two settings do the work, and neither is specific to this scene:
+
+- **`balance_weights.styles`** raised to 4.0 (from 0.3) makes style evenness dominate the
+  balancer's fit error; `ab_distance` / `or_distance` are dropped to 0 so the prune/refill
+  loop spends its freedom on the style dimension.
+- **`length_ratios` lean long** (4–8, mode 8). This matters more than the weight: a
+  length-2 or length-3 list has almost no room for `AR_post` (needs an `AR_pre` plus one
+  intervening subgoal) or `AB_pre+OR_post` (needs a prior visit), so short episodes are
+  what force `S` to dominate.
+
+Result over the 200 built episodes (1308 subtasks): 12.7%–17.2% per style against a 14.3%
+uniform target, versus 5.9%–20.6% under the default config. The residual `AB_post` surplus
+is structural and does not respond to `style_weights` — one alias bound by `AB_pre` can be
+referenced by more than one `AB_post`, so those tokens outnumber their binders by design.
+
+`episodes_per_scene` is 230, not 200: the builder drops the lists it cannot place in the
+scene (~13% here, and this scene has only ~19 usable goal objects), and 230 is what lands
+on 200 built episodes.
+
 Then generate and build:
 
 ```bash
