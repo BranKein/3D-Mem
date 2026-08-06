@@ -388,7 +388,11 @@ python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml --
 - **`GA_*` subtasks are scored here**, unlike in the navigation runner: "refers to no
   object" is a perfectly checkable answer even though "stop" is not a reachable target.
   `--skip-goal-absent` drops them.
-- Output under `results/<exp_name>/`: `feasibility_records_<mode>.jsonl` (one row per
+- Output goes to `results/<exp_name>_<model slug>/`, so running the same config against a
+  different model does not overwrite the first one. Compare runs with
+  `python scripts/compare_feasibility.py results/exp_feasibility_refonbench_*`, adding
+  `--first-episodes N` when one run was cut short with `--episodes-per-scene N`.
+- Files written under `results/<exp_name>_<model>/`: `feasibility_records_<mode>.jsonl` (one row per
   subgoal, with the raw model reply), `feasibility_results_<mode>.json`, and
   `feasibility_failures_<mode>.log` — the full exchange (system prompt, user prompt,
   reply) for every wrong answer, grouped so one `all_at_once` reply that got three
