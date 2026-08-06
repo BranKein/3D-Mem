@@ -8,6 +8,12 @@ seed: 77
 exp_name: "exp_feasibility_refonbench"
 output_parent_dir: "results"
 
+# Append the configured model to the output directory name, so results/<exp_name>_<model>
+# says which model produced them (e.g. exp_feasibility_refonbench_qwen2_5vl_7b). The
+# model is the single biggest factor in these numbers, so keep this on unless you are
+# deliberately overwriting one directory across models.
+append_model_to_exp_name: true
+
 # RefONEpisodeGenerator output: <dataset_root>/<split>/content/, .json or .json.gz.
 # The 200-episode style-balanced set on the same scene (built from
 # configs/generator.example_even.json) lives at

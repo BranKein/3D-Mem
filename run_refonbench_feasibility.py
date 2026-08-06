@@ -440,6 +440,18 @@ def parse_list_answer(response: Optional[str], n: int) -> Optional[List[Dict]]:
 # ---------------------------------------------------------------------------
 
 
+def model_slug() -> str:
+    """The configured model as a filename-safe tag, e.g. ``qwen2.5vl:7b`` -> ``qwen2_5vl_7b``.
+
+    Read from src.const rather than from a live client, so --dry-run names its output
+    directory the same way a real run would.
+    """
+    from src.const import OLLAMA_MODEL, OPENAI_MODEL, VLM_PROVIDER
+
+    name = OLLAMA_MODEL if (VLM_PROVIDER or "").lower() == "ollama" else OPENAI_MODEL
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", str(name).lower())).strip("_")
+
+
 def sort_roles(roles) -> List[str]:
     known = [r for r in ROLE_ORDER if r in roles]
     return known + sorted(r for r in roles if r not in ROLE_ORDER)
@@ -778,7 +790,15 @@ if __name__ == "__main__":
     if args.merge_roles:
         cfg.merge_roles = True
 
-    cfg.output_dir = os.path.join(cfg.output_parent_dir, cfg.exp_name)
+    # Which model answered is the first thing you need to know about a feasibility
+    # number -- it moves the headline SR by tens of points -- so it goes in the
+    # directory name rather than only inside the summary json.
+    exp_name = cfg.exp_name
+    if cfg.get("append_model_to_exp_name", True):
+        slug = model_slug()
+        if slug and not exp_name.endswith(slug):
+            exp_name = f"{exp_name}_{slug}"
+    cfg.output_dir = os.path.join(cfg.output_parent_dir, exp_name)
     os.makedirs(cfg.output_dir, exist_ok=True)
     if args.cfg_file:
         os.system(f"cp {args.cfg_file} {cfg.output_dir}")
