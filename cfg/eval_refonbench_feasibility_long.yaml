@@ -1,0 +1,25 @@
+# Feasibility probe on the long-episode set (lengths 5-30) -- see
+# RefONEpisodeGenerator/configs/generator.example_long.json. Same probe as
+# eval_refonbench_feasibility.yaml; only the data and the episode cap differ.
+#
+# The point is history length. On the 4-8 set a back reference never reached more than 7
+# instructions back; here it reaches 25, so this is where "does resolution decay as the
+# conversation grows" becomes answerable.
+
+seed: 77
+exp_name: "exp_feasibility_long_refonbench"
+output_parent_dir: "results"
+append_model_to_exp_name: true
+
+test_data_dir: "RefONEpisodeGenerator/out/refon_example_long_dataset/v1/val/content/"
+# the build produced 56 episodes from 58 style lists; keep the first 50
+episodes_per_scene: 50
+
+mode: "incremental"
+include_goal_absent: true
+merge_roles: false
+
+temperature: 0.0
+max_tokens: 16384
+workers: 4
+dry_run_examples: 3

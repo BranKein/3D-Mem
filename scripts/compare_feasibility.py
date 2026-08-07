@@ -54,6 +54,20 @@ SERIES_COLORS = [
     "#2a78d6", "#eb6834", "#1baf7a", "#eda100",
     "#e87ba4", "#008300", "#4a3aa7", "#e34948",
 ]
+# Reference distance = how many instructions back the referent sits (order - ref_order).
+# Binned rather than plotted per value: the distribution is heavily front-loaded (on the
+# long-episode set, 262 of 452 back references point 1-2 instructions back and the tail
+# past 17 has single-digit counts), so per-value points would be noise dressed as a curve.
+DISTANCE_BINS = [
+    (1, 1, "1"),
+    (2, 2, "2"),
+    (3, 4, "3-4"),
+    (5, 8, "5-8"),
+    (9, 16, "9-16"),
+    (17, 10**6, "17+"),
+]
+MIN_BIN_SAMPLES = 5
+
 METRIC_LABEL = {
     "sr": "joint SR",
     "referent_sr": "referent SR",
@@ -78,26 +92,79 @@ def load(results_dir, mode, first_episodes=None):
     return summary, None
 
 
-def _from_records(results_dir, mode, first_episodes):
-    """Re-aggregate the first N episodes from the per-subgoal records."""
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from run_refonbench_feasibility import aggregate
+def _repo_root():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return root
 
+
+def _read_records(results_dir, mode):
     path = os.path.join(results_dir, f"feasibility_records_{mode}.jsonl")
     if not os.path.exists(path):
-        return None, f"--first-episodes needs {os.path.basename(path)}, missing in {results_dir}"
+        return None
+    with open(path) as f:
+        return [json.loads(line) for line in f]
+
+
+def ref_distances(dataset_dir):
+    """(episode_id, order) -> how many instructions back that subgoal's referent sits.
+
+    Read from the dataset rather than the records: `ref_order` is what the instruction
+    literally points at ("the 2nd one" -> 2), which is the distance the agent has to
+    reach across. The records' own gt_refers_to is the *first* mention of the object,
+    which can be nearer when an episode visits one object repeatedly.
+    """
+    _repo_root()
+    from src.refonbench_utils import list_shard_files, load_shard
+
+    distances = {}
+    for name in list_shard_files(dataset_dir):
+        shard = load_shard(os.path.join(dataset_dir, name))
+        for episode in shard["episodes"]:
+            for subtask in episode["subtasks"]:
+                ref_order = subtask.get("ref_order")
+                if ref_order:
+                    key = (episode.get("episode_id"), subtask.get("order"))
+                    distances[key] = subtask["order"] - ref_order
+    return distances
+
+
+def distance_curve(records, distances, metric):
+    """{bin label: (n, rate)} for one run, over back-reference subgoals only."""
+    field = {"sr": "correct", "referent_sr": "referent_correct",
+             "category_sr": "category_correct"}[metric]
+    buckets = {label: [0, 0] for _, _, label in DISTANCE_BINS}
+    for r in records:
+        d = distances.get((r["episode_id"], r["order"]))
+        if d is None:
+            continue
+        for lo, hi, label in DISTANCE_BINS:
+            if lo <= d <= hi:
+                buckets[label][0] += 1
+                buckets[label][1] += int(r.get(field, False))
+                break
+    return {label: (n, hits / n) for label, (n, hits) in buckets.items() if n}
+
+
+def _from_records(results_dir, mode, first_episodes):
+    """Re-aggregate the first N episodes from the per-subgoal records."""
+    _repo_root()
+    from run_refonbench_feasibility import aggregate
+
+    all_records = _read_records(results_dir, mode)
+    if all_records is None:
+        return None, f"--first-episodes needs the records jsonl, missing in {results_dir}"
 
     seen, keep, records = [], set(), []
-    with open(path) as f:
-        for line in f:
-            r = json.loads(line)
-            ep = r["episode_id"]
-            if ep not in keep:
-                if len(seen) >= first_episodes:
-                    continue
-                seen.append(ep)
-                keep.add(ep)
-            records.append(r)
+    for r in all_records:
+        ep = r["episode_id"]
+        if ep not in keep:
+            if len(seen) >= first_episodes:
+                continue
+            seen.append(ep)
+            keep.add(ep)
+        records.append(r)
     if len(seen) < first_episodes:
         print(f"note: {results_dir} holds only {len(seen)} episodes", file=sys.stderr)
     return dict(aggregate(records), num_records=len(records)), None
@@ -135,8 +202,8 @@ def group_sr(summary, roles, metric):
     return tot / n if n else None
 
 
-def plot(runs, metric, mode, path, first_episodes=None):
-    """Two panels: per-style bars, and the metric against model size."""
+def plot(runs, metric, mode, path, first_episodes=None, curves=None):
+    """Per-style bars, the metric against model size, and against reference distance."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -145,9 +212,13 @@ def plot(runs, metric, mode, path, first_episodes=None):
     colors = {label: SERIES_COLORS[i % len(SERIES_COLORS)]
               for i, (label, _) in enumerate(runs)}
 
-    fig, (ax, ax2) = plt.subplots(
-        1, 2, figsize=(15, 5.6), gridspec_kw={"width_ratios": [1.75, 1]}
+    panels = 3 if curves else 2
+    fig, axes = plt.subplots(
+        1, panels, figsize=(7.5 * panels / 1.35, 5.6),
+        gridspec_kw={"width_ratios": [1.75, 1, 1.15][:panels]},
     )
+    ax, ax2 = axes[0], axes[1]
+    ax3 = axes[2] if curves else None
     fig.patch.set_facecolor("#fcfcfb")
 
     # --- per-style grouped bars -------------------------------------------------
@@ -205,7 +276,30 @@ def plot(runs, metric, mode, path, first_episodes=None):
     ax2.set_xlabel("parameters (B, total)", fontsize=9, color=INK_MUTED)
     ax2.set_title("by model size", fontsize=11, color=INK, loc="left")
 
-    for a in (ax, ax2):
+    # --- metric against how far back the referent sits -------------------------
+    if curves:
+        labels = [lab for _, _, lab in DISTANCE_BINS
+                  if any(lab in c for c in curves.values())]
+        for label, curve in curves.items():
+            xs = [i for i, lab in enumerate(labels)
+                  if lab in curve and curve[lab][0] >= MIN_BIN_SAMPLES]
+            ys = [100 * curve[labels[i]][1] for i in xs]
+            ax3.plot(xs, ys, color=colors[label], linewidth=2, marker="o",
+                     markersize=7, markeredgecolor="#fcfcfb", markeredgewidth=1.5)
+        ax3.set_xticks(range(len(labels)))
+        ax3.set_xticklabels(labels)
+        ax3.set_xlabel("reference distance (instructions back)", fontsize=9,
+                       color=INK_MUTED)
+        ax3.set_title("by reference distance", fontsize=11, color=INK, loc="left")
+        # sample counts, so a thin bin is not read as a trend
+        any_curve = next(iter(curves.values()))
+        for i, lab in enumerate(labels):
+            n = any_curve.get(lab, (0, 0))[0]
+            if n:
+                ax3.annotate(f"n={n}", (i, 0), textcoords="offset points",
+                             xytext=(0, 4), ha="center", fontsize=7, color=INK_MUTED)
+
+    for a in [a for a in (ax, ax2, ax3) if a is not None]:
         a.set_ylim(0, 105)
         a.set_facecolor("#fcfcfb")
         a.grid(axis="y", color=GRID, linewidth=0.8)
@@ -234,7 +328,11 @@ def main(argv=None):
     parser.add_argument("--metric", default="sr",
                         choices=["sr", "referent_sr", "category_sr"])
     parser.add_argument("--plot", metavar="PATH", default=None,
-                        help="also write a PNG: per-style bars + metric vs model size")
+                        help="also write a PNG: per-style bars, metric vs model size, "
+                             "and metric vs reference distance")
+    parser.add_argument("--dataset", default=None,
+                        help="shard dir used for reference distances (default: the "
+                             "test_data_dir recorded in the run's summary json)")
     parser.add_argument("--first-episodes", type=int, default=None,
                         help="re-aggregate each run over the first N episodes of the "
                              "shard, so runs of different length compare like for like")
@@ -291,7 +389,21 @@ def main(argv=None):
         print(row)
 
     if args.plot:
-        plot(runs, args.metric, args.mode, args.plot, args.first_episodes)
+        # reference distances come from the dataset the runs were scored against
+        dataset = args.dataset or runs[0][1].get("test_data_dir")
+        curves = None
+        if dataset and os.path.isdir(dataset):
+            distances = ref_distances(dataset)
+            curves = {}
+            for (label, _), d in zip(runs, args.results_dirs):
+                records = _read_records(d, args.mode)
+                if records:
+                    curves[label] = distance_curve(records, distances, args.metric)
+            curves = curves or None
+        elif dataset:
+            print(f"note: no reference-distance panel, {dataset} is not a directory "
+                  f"(pass --dataset)", file=sys.stderr)
+        plot(runs, args.metric, args.mode, args.plot, args.first_episodes, curves)
     return 0
 
 
