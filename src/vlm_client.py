@@ -59,6 +59,9 @@ class VLMClient(ABC):
         self.max_length_stops = max_length_stops
         self.length_stops = 0
         self._length_lock = threading.Lock()
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.top_p = top_p
 
     def note_length_stop(self):
         with self._length_lock:
@@ -68,10 +71,7 @@ class VLMClient(ABC):
     @property
     def gave_up(self) -> bool:
         """True once the model has been cut off `max_length_stops` times."""
-        return self.max_length_stops and self.length_stops >= self.max_length_stops
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.top_p = top_p
+        return bool(self.max_length_stops) and self.length_stops >= self.max_length_stops
 
     def call(self, sys_prompt: str, contents: Content) -> Optional[str]:
         """Query the model, retrying on failure. Returns None if all tries fail."""
