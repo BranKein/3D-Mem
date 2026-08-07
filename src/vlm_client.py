@@ -58,20 +58,37 @@ class VLMClient(ABC):
         #: give up on a model once this many replies were cut off by the token budget
         self.max_length_stops = max_length_stops
         self.length_stops = 0
+        self.consecutive_length_stops = 0
         self._length_lock = threading.Lock()
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.top_p = top_p
 
     def note_length_stop(self):
+        """A reply cut off by the token budget. Counted consecutively, on purpose.
+
+        The question itself is a failure either way. What the streak decides is whether
+        the *model* is worth continuing with, and only an unbroken run means "this model
+        cannot answer this task" -- which is what it looked like when qwen3.5:2b was cut
+        off on every single call. Counting cumulatively instead threw away two otherwise
+        healthy runs over a 0.3% blip rate: 5 stops in 1679 answered queries.
+        """
         with self._length_lock:
             self.length_stops += 1
-            return self.length_stops
+            self.consecutive_length_stops += 1
+            return self.consecutive_length_stops
+
+    def note_good_reply(self):
+        with self._length_lock:
+            self.consecutive_length_stops = 0
 
     @property
     def gave_up(self) -> bool:
-        """True once the model has been cut off `max_length_stops` times."""
-        return bool(self.max_length_stops) and self.length_stops >= self.max_length_stops
+        """True once the model was cut off `max_length_stops` times in a row."""
+        return (
+            bool(self.max_length_stops)
+            and self.consecutive_length_stops >= self.max_length_stops
+        )
 
     def call(self, sys_prompt: str, contents: Content) -> Optional[str]:
         """Query the model, retrying on failure. Returns None if all tries fail."""
@@ -179,6 +196,7 @@ class OpenAIClient(VLMClient):
             # keeps doing it is not answering this task at all.
             self.note_length_stop()
             return None
+        self.note_good_reply()
         return choice.message.content
 
     def _is_rate_limit_error(self, e: Exception) -> bool:
