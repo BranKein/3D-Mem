@@ -1,0 +1,34 @@
+# Destination probe for RefON instructions (run_refonbench_feasibility_nav.py).
+# No habitat and no images: the house is a set of virtual coordinates that exist only
+# inside the conversation, disclosed one object at a time as earlier subgoals reach them.
+# The agent answers "explore" / "(x, y)" / "infeasible" for each subgoal.
+
+seed: 77
+exp_name: "exp_feasibility_nav_refonbench"
+output_parent_dir: "results"
+append_model_to_exp_name: true
+
+test_data_dir: "RefONEpisodeGenerator/out/refon_example_even_dataset/v1/val/content/"
+episodes_per_scene: null
+
+nav:
+  # coordinates are drawn from [-room_size, room_size] on both axes
+  room_size: 8.0
+  # keep objects apart, so a near-miss cannot be scored as a hit by luck
+  min_separation: 1.0
+  # how far a returned coordinate may sit from the true one. The agent is copying a
+  # number out of the log rather than estimating it, so this only absorbs formatting.
+  coord_tolerance: 0.05
+
+# GA_unbound_alias and GA_invalid_ordinal expect "infeasible" straight away -- both are
+# refusable from the text. GA_absent_object ("Find the chandelier.") is not: nothing in
+# the conversation says the house has no chandelier, so it is asked twice -- "explore"
+# first, then "infeasible" once the search reports not_found. The second turn is reported
+# as its own style, GA_absent_object/not_found.
+include_goal_absent: true
+
+temperature: 0.0
+# Reasoning models spend the budget thinking and return empty content if it runs out.
+max_tokens: 16384
+workers: 4
+dry_run_examples: 4

@@ -457,17 +457,25 @@ def sort_roles(roles) -> List[str]:
     return known + sorted(r for r in roles if r not in ROLE_ORDER)
 
 
-def aggregate(records: List[Dict], merge_roles: bool = False) -> Dict:
+# (record field -> reported rate) for the two part-scores this runner breaks `correct`
+# into. run_refonbench_feasibility_nav.py passes its own pair; everything else about the
+# aggregation and the table is identical, so both share this code.
+DEFAULT_PART_SCORES = (
+    ("referent_correct", "referent_sr"),
+    ("category_correct", "category_sr"),
+)
+
+
+def aggregate(
+    records: List[Dict], merge_roles: bool = False, part_scores=DEFAULT_PART_SCORES
+) -> Dict:
     """Success rates overall and per instruction style."""
+    fields = [f for f, _ in part_scores]
 
     def _bucket():
-        return {
-            "count": 0,
-            "referent_correct": 0,
-            "category_correct": 0,
-            "correct": 0,
-            "parse_failed": 0,
-        }
+        b = {"count": 0, "correct": 0, "parse_failed": 0}
+        b.update({f: 0 for f in fields})
+        return b
 
     per_role: Dict[str, Dict] = {}
     overall = _bucket()
@@ -476,20 +484,20 @@ def aggregate(records: List[Dict], merge_roles: bool = False) -> Dict:
         bucket = per_role.setdefault(role, _bucket())
         for target in (bucket, overall):
             target["count"] += 1
-            target["referent_correct"] += int(r["referent_correct"])
-            target["category_correct"] += int(r["category_correct"])
             target["correct"] += int(r["correct"])
             target["parse_failed"] += int(r["parse_failed"])
+            for f in fields:
+                target[f] += int(r[f])
 
     def _rates(b):
         n = max(b["count"], 1)
-        return {
+        rates = {
             "count": b["count"],
-            "referent_sr": b["referent_correct"] / n,
-            "category_sr": b["category_correct"] / n,
             "sr": b["correct"] / n,
             "parse_failed": b["parse_failed"],
         }
+        rates.update({rate: b[f] / n for f, rate in part_scores})
+        return rates
 
     return {
         "overall": _rates(overall),
@@ -497,23 +505,26 @@ def aggregate(records: List[Dict], merge_roles: bool = False) -> Dict:
     }
 
 
-def format_table(summary: Dict) -> str:
-    header = (
-        f"{'instruction style':<20}{'n':>6}{'referent SR':>14}"
-        f"{'category SR':>14}{'joint SR':>11}{'unparsed':>10}"
-    )
+DEFAULT_COLUMNS = (("referent SR", "referent_sr"), ("category SR", "category_sr"))
+
+
+def format_table(summary: Dict, columns=DEFAULT_COLUMNS) -> str:
+    header = f"{'instruction style':<20}{'n':>6}"
+    for label, _ in columns:
+        header += f"{label:>14}"
+    header += f"{'joint SR':>11}{'unparsed':>10}"
+
+    def _row(name, s):
+        row = f"{name:<20}{s['count']:>6}"
+        for _, key in columns:
+            row += f"{s[key]:>13.1%} "
+        return row + f"{s['sr']:>10.1%}{s['parse_failed']:>10}"
+
     lines = [header, "-" * len(header)]
     for role, s in summary["per_style"].items():
-        lines.append(
-            f"{role:<20}{s['count']:>6}{s['referent_sr']:>13.1%}"
-            f"{s['category_sr']:>14.1%}{s['sr']:>11.1%}{s['parse_failed']:>10}"
-        )
-    o = summary["overall"]
+        lines.append(_row(role, s))
     lines.append("-" * len(header))
-    lines.append(
-        f"{'ALL':<20}{o['count']:>6}{o['referent_sr']:>13.1%}"
-        f"{o['category_sr']:>14.1%}{o['sr']:>11.1%}{o['parse_failed']:>10}"
-    )
+    lines.append(_row("ALL", summary["overall"]))
     return "\n".join(lines)
 
 
