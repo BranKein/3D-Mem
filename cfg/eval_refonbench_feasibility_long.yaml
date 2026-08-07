@@ -20,6 +20,6 @@ include_goal_absent: true
 merge_roles: false
 
 temperature: 0.0
-max_tokens: 16384
+max_tokens: 32768
 workers: 4
 dry_run_examples: 3

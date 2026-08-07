@@ -13,6 +13,7 @@ overridden with environment variables (see that file).
 """
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import List, Optional, Sequence, Tuple
@@ -45,12 +46,29 @@ class VLMClient(ABC):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         top_p: float = 0.95,
+        reasoning_effort: Optional[str] = None,
+        max_length_stops: int = 5,
     ):
         self.model = model
         self.max_tries = max_tries
         self.rate_limit_wait = rate_limit_wait
         self.error_wait = error_wait
         self.empty_response_wait = empty_response_wait
+        self.reasoning_effort = reasoning_effort
+        #: give up on a model once this many replies were cut off by the token budget
+        self.max_length_stops = max_length_stops
+        self.length_stops = 0
+        self._length_lock = threading.Lock()
+
+    def note_length_stop(self):
+        with self._length_lock:
+            self.length_stops += 1
+            return self.length_stops
+
+    @property
+    def gave_up(self) -> bool:
+        """True once the model has been cut off `max_length_stops` times."""
+        return self.max_length_stops and self.length_stops >= self.max_length_stops
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.top_p = top_p
@@ -136,8 +154,16 @@ class OpenAIClient(VLMClient):
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": self.format_content(contents)},
         ]
+        extra = {}
+        if self.reasoning_effort is not None:
+            # A reasoning model can spend the whole budget thinking and return empty
+            # content. qwen3.5:0.8b did exactly that on this task: 16384 completion
+            # tokens, 66k characters of `reasoning`, content "", 240s per call. With
+            # reasoning_effort="none" the same prompt answers in 0.5s and 46 tokens.
+            extra["reasoning_effort"] = self.reasoning_effort
         completion = self.client.chat.completions.create(
             model=self.model,
+            extra_body=extra or None,
             messages=message_text,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -146,7 +172,14 @@ class OpenAIClient(VLMClient):
             presence_penalty=0,
             stop=None,
         )
-        return completion.choices[0].message.content
+        choice = completion.choices[0]
+        if choice.finish_reason == "length":
+            # Ran out of budget mid-answer. Retrying is pointless -- the same prompt
+            # gets the same truncation -- so this is a failed question, and a model that
+            # keeps doing it is not answering this task at all.
+            self.note_length_stop()
+            return None
+        return choice.message.content
 
     def _is_rate_limit_error(self, e: Exception) -> bool:
         return isinstance(e, self._openai.RateLimitError)

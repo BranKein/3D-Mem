@@ -366,7 +366,9 @@ def collect_queries(cfg) -> List[Dict]:
     return queries
 
 
-def run_query(query: Dict, client, cfg) -> Dict:
+def run_query(query: Dict, client, cfg) -> Optional[Dict]:
+    if client is not None and client.gave_up:
+        return None  # the model has been dropped; stop spending time on it
     start = time.time()
     response = client.call(SYS_PROMPT, query["contents"]) if client else None
     elapsed = time.time() - start
@@ -443,6 +445,8 @@ def main(cfg, dry_run: bool = False):
     client = create_vlm_client(
         temperature=cfg.get("temperature", 0.0),
         max_tokens=cfg.get("max_tokens", 16384),
+        reasoning_effort=cfg.get("reasoning_effort", None),
+        max_length_stops=int(cfg.get("max_length_stops", 5)),
     )
 
     workers = max(int(cfg.get("workers", 1)), 1)
@@ -454,6 +458,8 @@ def main(cfg, dry_run: bool = False):
 
     records = []
     for done, record in enumerate(results, 1):
+        if record is None:
+            continue
         records.append(record)
         logging.info(
             f"[{done}/{len(queries)}] {'OK ' if record['correct'] else 'BAD'} "
@@ -462,6 +468,16 @@ def main(cfg, dry_run: bool = False):
             f"{record['pred_action']}{record['pred_coord'] or ''} "
             f"gt {record['gt_action']}{record['gt_coord'] or ''}"
         )
+
+    if client.gave_up:
+        logging.error(
+            f"DROPPED {client.model}: {client.length_stops} replies were cut off by the "
+            f"token budget (finish_reason 'length'), the limit is "
+            f"{client.max_length_stops}. Ran {len(records)}/{len(queries)} queries. "
+            f"This model does not answer within cfg.max_tokens ({client.max_tokens}) -- "
+            f"for a reasoning model, set cfg.reasoning_effort: none, or raise max_tokens."
+        )
+        raise SystemExit(3)
 
     summary = aggregate(
         records,
@@ -511,6 +527,12 @@ if __name__ == "__main__":
     parser.add_argument("--episodes-per-scene", type=int, default=None)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--test-data-dir", default=None)
+    parser.add_argument(
+        "--reasoning-effort",
+        default=None,
+        help='pass reasoning_effort to the model ("none" turns thinking off). Appends '
+             "_nothink to the output directory so the two runs stay apart.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -522,6 +544,11 @@ if __name__ == "__main__":
         cfg.workers = args.workers
     if args.test_data_dir is not None:
         cfg.test_data_dir = args.test_data_dir
+
+    if args.reasoning_effort:
+        cfg.reasoning_effort = args.reasoning_effort
+        if args.reasoning_effort == "none":
+            cfg.exp_name = f"{cfg.exp_name}_nothink"
 
     exp_name = cfg.exp_name
     if cfg.get("append_model_to_exp_name", True):
