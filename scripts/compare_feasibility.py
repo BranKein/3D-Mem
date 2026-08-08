@@ -72,20 +72,39 @@ METRIC_LABEL = {
     "sr": "joint SR",
     "referent_sr": "referent SR",
     "category_sr": "category SR",
+    "action_sr": "action SR",
+    "coordinate_sr": "coord SR",
 }
+
+# metric -> the per-record boolean it averages, for the reference-distance curve
+METRIC_FIELD = {
+    "sr": "correct",
+    "referent_sr": "referent_correct",
+    "category_sr": "category_correct",
+    "action_sr": "action_correct",
+    "coordinate_sr": "coordinate_correct",
+}
+
+
+def filenames(mode, nav):
+    """(summary json, records jsonl) for a run directory."""
+    if nav:
+        return "feasibility_nav_results.json", "feasibility_nav_records.jsonl"
+    return (f"feasibility_results_{mode}.json", f"feasibility_records_{mode}.jsonl")
 INK = "#0b0b0b"
 INK_MUTED = "#52514e"
 GRID = "#d9d8d4"
 
 
-def load(results_dir, mode, first_episodes=None):
-    path = os.path.join(results_dir, f"feasibility_results_{mode}.json")
+def load(results_dir, mode, first_episodes=None, nav=False):
+    name, _ = filenames(mode, nav)
+    path = os.path.join(results_dir, name)
     if not os.path.exists(path):
-        return None, f"no {os.path.basename(path)} in {results_dir}"
+        return None, f"no {name} in {results_dir}"
     with open(path) as f:
         summary = json.load(f)
     if first_episodes:
-        recomputed, err = _from_records(results_dir, mode, first_episodes)
+        recomputed, err = _from_records(results_dir, mode, first_episodes, nav)
         if err:
             return None, err
         summary = dict(summary, **recomputed)
@@ -99,8 +118,9 @@ def _repo_root():
     return root
 
 
-def _read_records(results_dir, mode):
-    path = os.path.join(results_dir, f"feasibility_records_{mode}.jsonl")
+def _read_records(results_dir, mode, nav=False):
+    _, name = filenames(mode, nav)
+    path = os.path.join(results_dir, name)
     if not os.path.exists(path):
         return None
     with open(path) as f:
@@ -132,8 +152,7 @@ def ref_distances(dataset_dir):
 
 def distance_curve(records, distances, metric):
     """{bin label: (n, rate)} for one run, over back-reference subgoals only."""
-    field = {"sr": "correct", "referent_sr": "referent_correct",
-             "category_sr": "category_correct"}[metric]
+    field = METRIC_FIELD[metric]
     buckets = {label: [0, 0] for _, _, label in DISTANCE_BINS}
     for r in records:
         d = distances.get((r["episode_id"], r["order"]))
@@ -147,12 +166,12 @@ def distance_curve(records, distances, metric):
     return {label: (n, hits / n) for label, (n, hits) in buckets.items() if n}
 
 
-def _from_records(results_dir, mode, first_episodes):
+def _from_records(results_dir, mode, first_episodes, nav=False):
     """Re-aggregate the first N episodes from the per-subgoal records."""
     _repo_root()
     from run_refonbench_feasibility import aggregate
 
-    all_records = _read_records(results_dir, mode)
+    all_records = _read_records(results_dir, mode, nav)
     if all_records is None:
         return None, f"--first-episodes needs the records jsonl, missing in {results_dir}"
 
@@ -167,7 +186,15 @@ def _from_records(results_dir, mode, first_episodes):
         records.append(r)
     if len(seen) < first_episodes:
         print(f"note: {results_dir} holds only {len(seen)} episodes", file=sys.stderr)
-    return dict(aggregate(records), num_records=len(records)), None
+    part_scores = (
+        (("action_correct", "action_sr"), ("coordinate_correct", "coordinate_sr"))
+        if nav
+        else (("referent_correct", "referent_sr"), ("category_correct", "category_sr"))
+    )
+    return (
+        dict(aggregate(records, part_scores=part_scores), num_records=len(records)),
+        None,
+    )
 
 
 def label_for(summary, results_dir):
@@ -202,7 +229,7 @@ def group_sr(summary, roles, metric):
     return tot / n if n else None
 
 
-def plot(runs, metric, mode, path, first_episodes=None, curves=None):
+def plot(runs, metric, mode, path, first_episodes=None, curves=None, nav=False):
     """Per-style bars, the metric against model size, and against reference distance."""
     import matplotlib
     matplotlib.use("Agg")
@@ -235,7 +262,9 @@ def plot(runs, metric, mode, path, first_episodes=None, curves=None):
         ax.bar(xs, ys, width=width * 0.88, color=colors[label], label=label,
                linewidth=0)
     ax.set_xticks(range(len(roles)))
-    ax.set_xticklabels(roles, rotation=30, ha="right", fontsize=9, color=INK_MUTED)
+    # the nav sweep adds GA_absent_object/not_found, long enough to reach the legend at
+    # 30 degrees -- steepen the labels rather than truncate a style name
+    ax.set_xticklabels(roles, rotation=45, ha="right", fontsize=9, color=INK_MUTED)
     ax.set_ylabel(METRIC_LABEL.get(metric, metric) + " (%)", fontsize=9, color=INK_MUTED)
     ax.set_title("by instruction style", fontsize=11, color=INK, loc="left")
 
@@ -311,11 +340,12 @@ def plot(runs, metric, mode, path, first_episodes=None, curves=None):
         a.tick_params(colors=INK_MUTED, labelsize=9)
 
     ax.legend(fontsize=8, frameon=False, ncol=min(len(runs), 4),
-              loc="upper center", bbox_to_anchor=(0.5, -0.22), labelcolor=INK_MUTED)
+              loc="upper center", bbox_to_anchor=(0.5, -0.46), labelcolor=INK_MUTED)
     scope = f", first {first_episodes} episodes" if first_episodes else ""
-    fig.suptitle(f"RefON instruction feasibility - {mode}{scope}",
+    what = "destination (explore / coordinate / infeasible)" if nav else mode
+    fig.suptitle(f"RefON instruction feasibility - {what}{scope}",
                  fontsize=13, color=INK, x=0.02, ha="left")
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.tight_layout(rect=(0, 0.04, 1, 0.94))
     fig.savefig(path, dpi=150, facecolor=fig.get_facecolor())
     print(f"\nwrote {path}")
 
@@ -325,8 +355,12 @@ def main(argv=None):
     parser.add_argument("results_dirs", nargs="+", help="results/<exp_name>_<model> dirs")
     parser.add_argument("--mode", default="incremental",
                         choices=["incremental", "all_at_once"])
+    parser.add_argument("--nav", action="store_true",
+                        help="compare run_refonbench_feasibility_nav.py runs "
+                             "(explore / coordinate / infeasible) instead")
     parser.add_argument("--metric", default="sr",
-                        choices=["sr", "referent_sr", "category_sr"])
+                        choices=["sr", "referent_sr", "category_sr",
+                                 "action_sr", "coordinate_sr"])
     parser.add_argument("--plot", metavar="PATH", default=None,
                         help="also write a PNG: per-style bars, metric vs model size, "
                              "and metric vs reference distance")
@@ -340,7 +374,7 @@ def main(argv=None):
 
     runs = []
     for d in args.results_dirs:
-        summary, err = load(d, args.mode, args.first_episodes)
+        summary, err = load(d, args.mode, args.first_episodes, args.nav)
         if err:
             print(f"skipping: {err}", file=sys.stderr)
             continue
@@ -356,7 +390,8 @@ def main(argv=None):
     if len(runs) == 2:
         header += f"{'delta':>10}"
     scope = f"  first {args.first_episodes} episodes" if args.first_episodes else ""
-    print(f"mode={args.mode}  metric={args.metric}{scope}")
+    what = "feasibility-nav" if args.nav else f"mode={args.mode}"
+    print(f"{what}  metric={args.metric}{scope}")
     print(header)
     print("-" * len(header))
 
@@ -396,14 +431,15 @@ def main(argv=None):
             distances = ref_distances(dataset)
             curves = {}
             for (label, _), d in zip(runs, args.results_dirs):
-                records = _read_records(d, args.mode)
+                records = _read_records(d, args.mode, args.nav)
                 if records:
                     curves[label] = distance_curve(records, distances, args.metric)
             curves = curves or None
         elif dataset:
             print(f"note: no reference-distance panel, {dataset} is not a directory "
                   f"(pass --dataset)", file=sys.stderr)
-        plot(runs, args.metric, args.mode, args.plot, args.first_episodes, curves)
+        plot(runs, args.metric, args.mode, args.plot, args.first_episodes, curves,
+             nav=args.nav)
     return 0
 
 
