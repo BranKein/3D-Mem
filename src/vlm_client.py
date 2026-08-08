@@ -4,9 +4,10 @@ The evaluation code builds prompts as a list of "content" tuples, where each
 tuple is either ``(text,)`` or ``(text, base64_png_image)``.  A client takes
 such a list plus a system prompt and returns the model response as a string.
 
-Two backends are provided:
+Three backends are provided:
     - "openai": the OpenAI API or any OpenAI-compatible endpoint (GPT-4o, ...)
     - "ollama": a local ollama server, through its OpenAI-compatible /v1 API
+    - "anthropic": the Anthropic API, through the official SDK
 
 The backend and its settings are read from src/const.py, which in turn can be
 overridden with environment variables (see that file).
@@ -19,6 +20,8 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Sequence, Tuple
 
 from src.const import (
+    ANTHROPIC_MODEL,
+    ANTHROPIC_TIMEOUT,
     END_POINT,
     OLLAMA_END_POINT,
     OLLAMA_MODEL,
@@ -59,6 +62,8 @@ class VLMClient(ABC):
         self.max_length_stops = max_length_stops
         self.length_stops = 0
         self.consecutive_length_stops = 0
+        #: replies declined by a provider policy classifier (Anthropic `stop_reason`)
+        self.refusals = 0
         self._length_lock = threading.Lock()
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -241,9 +246,101 @@ class OllamaClient(OpenAIClient):
             )
 
 
+class AnthropicClient(VLMClient):
+    """The Anthropic API, through the official SDK.
+
+    Not an OpenAI-compatible shim: the request shape differs enough that reusing
+    OpenAIClient would misreport the two things this repo's runners depend on --
+    a reply cut off by the token budget, and an empty body.
+    """
+
+    def __init__(self, model=None, timeout=None, effort=None, **kwargs):
+        super().__init__(model=model or ANTHROPIC_MODEL, **kwargs)
+        import anthropic
+
+        self._anthropic = anthropic
+        # No api_key argument: the SDK resolves ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN
+        # or an `ant auth login` profile on its own, and passing an empty string would
+        # shadow all three.
+        self.client = anthropic.Anthropic(
+            timeout=ANTHROPIC_TIMEOUT if timeout is None else timeout
+        )
+        #: output_config.effort, when the model supports it. Haiku 4.5 rejects it.
+        self.effort = effort
+
+    @staticmethod
+    def format_content(contents: Content) -> List[dict]:
+        blocks = []
+        for c in contents:
+            blocks.append({"type": "text", "text": c[0]})
+            if len(c) == 2:
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": c[1],
+                        },
+                    }
+                )
+        return blocks
+
+    def _chat(self, sys_prompt: str, contents: Content) -> str:
+        params = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": sys_prompt,
+            "messages": [{"role": "user", "content": self.format_content(contents)}],
+        }
+        # temperature is accepted on Haiku 4.5 and the other pre-4.6 models, and
+        # rejected outright on Opus 4.7+/Sonnet 5 -- send it only when it would be
+        # honoured, so the same client works across both.
+        if not self._drops_sampling_params():
+            params["temperature"] = self.temperature
+            params["top_p"] = self.top_p
+        if self.effort:
+            params["output_config"] = {"effort": self.effort}
+        if self.reasoning_effort == "none":
+            # the cross-provider "turn thinking off" switch; on models where thinking
+            # is on by default this is what keeps the run cheap
+            params["thinking"] = {"type": "disabled"}
+
+        # Stream: the SDK refuses non-streaming requests whose max_tokens implies a
+        # long generation, and these configs run at 32768.
+        with self.client.messages.stream(**params) as stream:
+            message = stream.get_final_message()
+
+        if message.stop_reason == "max_tokens":
+            self.note_length_stop()
+            return None
+        if message.stop_reason == "refusal":
+            # A policy decline, not an outage. Return None rather than "" so it skips
+            # the empty-body retry -- the same prompt gets the same decline, and five
+            # 2s retries per refused question would only slow the run down. It lands in
+            # the records as an unanswered question, same as any other empty body.
+            self.refusals += 1
+            print(f"Refusal from {self.model} (stop_reason=refusal); scoring as no answer")
+            self.note_good_reply()
+            return None
+        self.note_good_reply()
+        return "".join(b.text for b in message.content if b.type == "text")
+
+    def _drops_sampling_params(self) -> bool:
+        m = self.model
+        return any(
+            tag in m
+            for tag in ("opus-4-7", "opus-4-8", "opus-5", "sonnet-5", "fable-5", "mythos-5")
+        )
+
+    def _is_rate_limit_error(self, e: Exception) -> bool:
+        return isinstance(e, self._anthropic.RateLimitError)
+
+
 BACKENDS = {
     "openai": OpenAIClient,
     "ollama": OllamaClient,
+    "anthropic": AnthropicClient,
 }
 
 
