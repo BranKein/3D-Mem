@@ -114,6 +114,12 @@ class VLMClient(ABC):
                     continue
                 return response
             except Exception as e:
+                if self._is_permanent_error(e):
+                    # A malformed request is malformed on every attempt. Retrying it
+                    # five times 60s apart turned one bad parameter into a run that
+                    # never finished -- fail the question and move on.
+                    print(f"Permanent request error, not retrying: {e}")
+                    return None
                 wait = self.error_wait
                 if self._is_rate_limit_error(e):
                     print(f"Rate limit error, waiting for {self.rate_limit_wait}s")
@@ -132,6 +138,11 @@ class VLMClient(ABC):
 
     def _is_rate_limit_error(self, e: Exception) -> bool:
         return False
+
+    def _is_permanent_error(self, e: Exception) -> bool:
+        """A client-side error that will fail identically on every retry (400/404/422)."""
+        status = getattr(e, "status_code", None)
+        return status in (400, 404, 422)
 
 
 class OpenAIClient(VLMClient):
@@ -293,12 +304,11 @@ class AnthropicClient(VLMClient):
             "system": sys_prompt,
             "messages": [{"role": "user", "content": self.format_content(contents)}],
         }
-        # temperature is accepted on Haiku 4.5 and the other pre-4.6 models, and
-        # rejected outright on Opus 4.7+/Sonnet 5 -- send it only when it would be
-        # honoured, so the same client works across both.
+        # Sampling: temperature only, never alongside top_p -- every Claude 4+ model
+        # 400s on "`temperature` and `top_p` cannot both be specified". Opus 4.7+ /
+        # Sonnet 5 / Fable 5 reject sampling parameters entirely, so they get neither.
         if not self._drops_sampling_params():
             params["temperature"] = self.temperature
-            params["top_p"] = self.top_p
         if self.effort:
             params["output_config"] = {"effort": self.effort}
         if self.reasoning_effort == "none":

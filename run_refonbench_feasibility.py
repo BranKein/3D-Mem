@@ -446,9 +446,12 @@ def model_slug() -> str:
     Read from src.const rather than from a live client, so --dry-run names its output
     directory the same way a real run would.
     """
-    from src.const import OLLAMA_MODEL, OPENAI_MODEL, VLM_PROVIDER
+    from src.const import ANTHROPIC_MODEL, OLLAMA_MODEL, OPENAI_MODEL, VLM_PROVIDER
 
-    name = OLLAMA_MODEL if (VLM_PROVIDER or "").lower() == "ollama" else OPENAI_MODEL
+    name = {
+        "ollama": OLLAMA_MODEL,
+        "anthropic": ANTHROPIC_MODEL,
+    }.get((VLM_PROVIDER or "").lower(), OPENAI_MODEL)
     return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", str(name).lower())).strip("_")
 
 
