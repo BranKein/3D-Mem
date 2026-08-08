@@ -91,6 +91,18 @@ Style shares land at 12.7–17.2% (balanced) and 11.7–16.8% (long) against a 1
 target. The residual `AB_post` surplus is structural: one alias bound by `AB_pre` can be
 referenced by several `AB_post`, so those tokens outnumber their binders by design.
 
+### 1.5 Reporting styles
+
+`AB_pre` and `AR_pre` are folded into `S` throughout, as `scripts/summarize_refonbench.py`
+does. All three name their own target and the answer has the same shape for each —
+`AB_pre` only appends an alias binding ("Let's call it A1."), which is not something to
+resolve. That makes `S` a 534-sample row on the balanced set and 958 on the long one.
+
+`AB_pre+OR_post` stays separate: it binds an alias *and* refers back, so folding it in
+would put an anaphoric case in the row that is supposed to be free of them. Pass
+`--merge-roles` to the comparison scripts to reproduce this grouping, or drop it to see
+all ten styles.
+
 ### 1.4 Models
 
 All four run **non-thinking**, so the comparison is one condition throughout (see §6.1 for
@@ -114,26 +126,26 @@ non-thinking mode — `think=False`, `/no_think`, `enable_thinking=False` and
 
 ## 2. Referent probe, balanced set (1308 subgoals)
 
-| style | 2b | 4b | 7b | 9b | gemma4 26b† |
-|---|---|---|---|---|---|
-| S | 79.0 | 90.9 | **98.4** | 94.6 | 91.4 |
-| AB_pre | 75.5 | 87.1 | **99.4** | 95.7 | 88.3 |
-| AR_pre | 82.7 | 93.0 | **100.0** | 97.3 | 95.1 |
-| AB_post | 0.0 | 71.4 | 53.2 | 85.9 | **97.7** |
-| AR_post | 2.7 | 43.8 | 14.1 | 64.3 | **96.8** |
-| OR_post | 0.0 | 52.2 | 11.8 | 84.8 | **94.9** |
-| AB_pre+OR_post | 0.0 | 22.2 | 2.5 | 75.3 | **97.5** |
-| GA_absent_object | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 |
-| GA_invalid_ordinal | 0.0 | 15.4 | 0.0 | 84.6 | **100.0** |
-| GA_unbound_alias | 0.0 | 0.0 | 0.0 | 28.6 | **100.0** |
-| **ALL** | **33.4** | **65.8** | **54.1** | **85.2** | **94.8** |
-| *names its target* | 79.2 | 90.4 | **99.3** | 95.9 | 91.8 |
-| *back-reference* | 0.7 | 49.3 | 22.6 | 78.0 | **96.8** |
+`S` here folds in `AB_pre` and `AR_pre` (§1.5).
+
+| style | n | 2b | 4b | 7b | 9b | gemma4 26b† |
+|---|---|---|---|---|---|---|
+| **S** | 534 | 79.2 | 90.4 | **99.3** | 95.9 | 91.8 |
+| AB_post | 220 | 0.0 | 71.4 | 53.2 | 85.9 | **97.7** |
+| AR_post | 185 | 2.7 | 43.8 | 14.1 | 64.3 | **96.8** |
+| OR_post | 178 | 0.0 | 52.2 | 11.8 | 84.8 | **94.9** |
+| AB_pre+OR_post | 162 | 0.0 | 22.2 | 2.5 | 75.3 | **97.5** |
+| GA_absent_object | 9 | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 |
+| GA_invalid_ordinal | 13 | 0.0 | 15.4 | 0.0 | 84.6 | **100.0** |
+| GA_unbound_alias | 7 | 0.0 | 0.0 | 0.0 | 28.6 | **100.0** |
+| **ALL** | 1308 | **33.4** | **65.8** | **54.1** | **85.2** | **94.8** |
+| *back-reference* | 745 | 0.7 | 49.3 | 22.6 | 78.0 | **96.8** |
 
 † thinking enabled; shown for reference, not as part of the ladder.
 
-**The split at the bottom is the whole story.** Every model is decent at instructions that
-name their own target and they separate almost entirely on the ones that do not.
+**The first row against the last is the whole story.** Every model is decent at
+instructions that name their own target, and they separate almost entirely on the ones
+that do not: 79→96 across the ladder on `S`, 0.7→78 on back references.
 
 ---
 
@@ -144,17 +156,21 @@ name their own target and they separate almost entirely on the ones that do not.
 | action SR | 28.9 | 85.0 | 71.1 | **90.2** |
 | coord SR | 43.1 | 68.2 | 65.9 | **78.8** |
 | **joint SR** | **28.3** | **63.8** | **60.7** | **77.9** |
-| *names its target* | 63.9 | 80.5 | — | **91.0** |
-| *back-reference* | 0.4 | 51.1 | — | **68.1** |
+| *S* | 63.9 | 80.5 | 85.0 | **91.0** |
+| *back-reference* | 0.4 | 51.1 | 45.5 | **68.1** |
 
 Per style for `qwen3.5:9b`, action vs joint:
 
-| style | action SR | joint SR | gap |
-|---|---|---|---|
-| AR_post | 90.3 | 49.7 | **−40.6** |
-| OR_post | 87.1 | 69.7 | −17.4 |
-| AB_post | 90.0 | 78.6 | −11.4 |
-| AB_pre+OR_post | 92.0 | 72.8 | −19.2 |
+| style | n | action SR | joint SR | gap |
+|---|---|---|---|---|
+| S | 534 | 91.0 | 91.0 | 0.0 |
+| AB_post | 220 | 90.0 | 78.6 | −11.4 |
+| **AR_post** | 185 | 90.3 | 49.7 | **−40.6** |
+| OR_post | 178 | 87.1 | 69.7 | −17.4 |
+| AB_pre+OR_post | 162 | 92.0 | 72.8 | −19.2 |
+
+`S` has no gap by construction — `explore` is the whole answer, there is no coordinate to
+get wrong. Every back-reference row does.
 
 **Deciding to go back is easier than knowing where back is.** On `AR_post` the model picks
 the right *kind* of action nine times out of ten and still gets the destination wrong in
@@ -179,6 +195,21 @@ in one turn would have hidden this entirely.
 
 **Everything degrades by 18–24 points, and the biggest model degrades the most.** Scale
 does not buy robustness to a longer conversation here — it buys a higher starting point.
+
+Per style:
+
+| style | n | 2b | 4b | 7b | 9b |
+|---|---|---|---|---|---|
+| **S** | 958 | 34.6 | 66.4 | 44.2 | **71.0** |
+| AB_post | 379 | 0.0 | 44.9 | 45.4 | **70.4** |
+| AR_post | 325 | 1.8 | 21.2 | 25.2 | **48.3** |
+| OR_post | 332 | 0.0 | 18.7 | 12.0 | **50.0** |
+| AB_pre+OR_post | 264 | 0.0 | 6.4 | 10.6 | **36.7** |
+| **ALL** | 2273 | **15.0** | **42.5** | **33.0** | **60.8** |
+| *back-reference* | 1300 | 0.5 | 24.5 | 24.8 | **52.8** |
+
+Note that `S` falls too — 95.9 → 71.0 for 9b — even though a direct instruction carries
+everything it needs. Length hurts the easy cases as well, not only the anaphoric ones.
 
 Joint SR against how far back the referent sits:
 
@@ -209,8 +240,8 @@ measure.
 ### 5.2 The scale ladder is real but style-specific
 
 Within one family and one condition: **33.4 → 65.8 → 85.2%** (2b → 4b → 9b). Almost all of
-the gain is in back references (0.7 → 49.3 → 78.0), while "names its target" starts at
-79.2% and creeps to 95.9%. Scale buys reference resolution, not instruction understanding.
+the gain is in back references (0.7 → 49.3 → 78.0), while `S` starts at 79.2% and creeps
+to 95.9%. Scale buys reference resolution, not instruction understanding.
 
 ### 5.3 The two probes are complementary, not a difficulty ladder
 
@@ -226,8 +257,9 @@ Paired subgoal by subgoal on the same 1308 items:
 If the destination probe were the referent probe plus an extra step, "nav only" would be
 near zero. It is 6–20%.
 
-`qwen2.5vl:7b` actually scores **higher** on the harder-looking probe (61.2 vs 54.1),
-and the per-style numbers say why: `AB_pre+OR_post` 2.5 → 48.1, `OR_post` 11.8 → 49.4,
+`qwen2.5vl:7b` actually scores **higher** on the harder-looking probe (61.2 vs 54.1), and
+the per-style numbers say why. It moves the *wrong* way on `S` (99.3 → 85.0) and hugely the
+right way on every back reference: `AB_pre+OR_post` 2.5 → 48.1, `OR_post` 11.8 → 49.4,
 `AR_post` 14.1 → 40.0. This model cannot produce *"the referent is instruction 3"* but can
 copy that instruction's coordinates. Its low referent score was substantially a
 **format** limitation, and the destination probe demonstrates that independently.
@@ -255,10 +287,10 @@ like-for-like entry in the ladder.
 A subgoal that introduces a new object whose *category* an earlier instruction already used
 ("Find the cardboard box." when instruction 1 was also "Find the cardboard box.") cannot be
 told apart from a back reference without seeing the scene: **49/533 (9%)** on the balanced
-set, **54/403 (13%)** on the long set. This puts an unreachable ceiling on the S / AB_pre /
-AR_pre rows and explains why gemma4 scores *lower* there (88–95%) than on back references
-(95–98%). It does not affect back-reference rows, where the answer is uniquely determined,
-and it applies identically to every model, so model comparisons remain valid.
+set, **54/403 (13%)** on the long set. This puts an unreachable ceiling on the `S` row and
+explains why gemma4 scores *lower* there (91.8%) than on back references (96.8%). It does
+not affect back-reference rows, where the answer is uniquely determined, and it applies
+identically to every model, so model comparisons remain valid.
 
 ### 6.3 The headline number is prompt-sensitive on small models
 
@@ -315,10 +347,12 @@ OLLAMA_MODEL=qwen3.5:9b python run_refonbench_feasibility_nav.py \
 OLLAMA_MODEL=qwen3.5:9b python run_refonbench_feasibility.py \
     -cf cfg/eval_refonbench_feasibility_long.yaml --workers 4 --reasoning-effort none
 
-# tables and charts
-python scripts/compare_feasibility.py results/exp_feasibility_refonbench_nothink_* --plot cmp_even.png
-python scripts/compare_feasibility.py --nav results/exp_feasibility_nav_refonbench_nothink_* --plot cmp_nav.png
-python scripts/compare_probe_vs_nav.py --plot cmp_probe_vs_nav.png
+# tables and charts (--merge-roles folds AB_pre / AR_pre into S, as reported here)
+python scripts/compare_feasibility.py --merge-roles \
+    results/exp_feasibility_refonbench_nothink_* --plot cmp_even.png
+python scripts/compare_feasibility.py --merge-roles --nav \
+    results/exp_feasibility_nav_refonbench_nothink_* --plot cmp_nav.png
+python scripts/compare_probe_vs_nav.py --merge-roles --plot cmp_probe_vs_nav.png
 ```
 
 Every wrong answer's full exchange — system prompt, user prompt, reply — is in
