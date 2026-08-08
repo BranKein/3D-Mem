@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts.compare_feasibility import (  # noqa: E402
-    GRID, INK, INK_MUTED, SERIES_COLORS, sort_roles,
+    GRID, INK, INK_MUTED, ROLE_MERGE, SERIES_COLORS, sort_roles,
 )
 
 PROBE_GLOB = "results/exp_feasibility_refonbench_nothink_*"
@@ -37,7 +37,7 @@ def model_of(summary_path):
         return json.load(f).get("model")
 
 
-def collect(probe_glob, nav_glob):
+def collect(probe_glob, nav_glob, merge_roles=False):
     """model -> {(episode, order): (probe_correct, nav_correct)}"""
     probe = {}
     for d in sorted(glob.glob(probe_glob)):
@@ -63,7 +63,8 @@ def collect(probe_glob, nav_glob):
             key = (r["episode_id"], r["order"])
             other = by_key.get(key)
             if other:
-                rows[key] = (other["correct"], r["correct"], r["role"])
+                role = ROLE_MERGE.get(r["role"], r["role"]) if merge_roles else r["role"]
+                rows[key] = (other["correct"], r["correct"], role)
         paired[model] = rows
     return paired
 
@@ -73,9 +74,11 @@ def main(argv=None):
     p.add_argument("--probe-glob", default=PROBE_GLOB)
     p.add_argument("--nav-glob", default=NAV_GLOB)
     p.add_argument("--plot", default=None)
+    p.add_argument("--merge-roles", action="store_true",
+                   help="fold AB_pre and AR_pre into S")
     args = p.parse_args(argv)
 
-    paired = collect(args.probe_glob, args.nav_glob)
+    paired = collect(args.probe_glob, args.nav_glob, args.merge_roles)
     if not paired:
         print("no model has both a referent run and a nav run", file=sys.stderr)
         return 1

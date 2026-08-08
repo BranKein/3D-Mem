@@ -46,6 +46,36 @@ ROLE_ORDER = [
 NEW_OBJECT_ROLES = ("S", "AB_pre", "AR_pre")
 BACK_REF_ROLES = ("AB_post", "AR_post", "OR_post", "AB_pre+OR_post")
 
+# --merge-roles folds these into S, as scripts/summarize_refonbench.py does. All three ask
+# the same thing of the model -- name the object this instruction points at -- and the
+# answer has the same shape for each; AB_pre only adds an alias binding on the end, which
+# is not something to resolve. AB_pre+OR_post stays out: it binds *and* refers back.
+ROLE_MERGE = {"AB_pre": "S", "AR_pre": "S"}
+
+
+def merge_per_style(summary):
+    """Fold ROLE_MERGE roles together in a loaded summary.
+
+    Rates are re-weighted by sample count, which is exact: a per-style rate is
+    hits/count, so the merged rate is sum(count_i * rate_i) / sum(count_i).
+    """
+    merged = {}
+    for role, cell in summary["per_style"].items():
+        target = ROLE_MERGE.get(role, role)
+        acc = merged.setdefault(target, {"count": 0, "parse_failed": 0})
+        n = cell["count"]
+        acc["count"] += n
+        acc["parse_failed"] += cell.get("parse_failed", 0)
+        for key, value in cell.items():
+            if key.endswith("_sr") or key == "sr":
+                acc[key] = acc.get(key, 0.0) + n * value
+    for acc in merged.values():
+        n = max(acc["count"], 1)
+        for key in list(acc):
+            if key.endswith("_sr") or key == "sr":
+                acc[key] /= n
+    return dict(summary, per_style={r: merged[r] for r in sort_roles(merged)})
+
 # Validated categorical palette, light surface #fcfcfb, assigned in this fixed order and
 # never cycled (scripts/validate_palette.js of the dataviz skill: all checks pass on the
 # adjacent pairlist; three slots sit under 3:1 contrast, so the printed table is the
@@ -355,6 +385,9 @@ def main(argv=None):
     parser.add_argument("results_dirs", nargs="+", help="results/<exp_name>_<model> dirs")
     parser.add_argument("--mode", default="incremental",
                         choices=["incremental", "all_at_once"])
+    parser.add_argument("--merge-roles", action="store_true",
+                        help="fold AB_pre and AR_pre into S, as "
+                             "scripts/summarize_refonbench.py does")
     parser.add_argument("--nav", action="store_true",
                         help="compare run_refonbench_feasibility_nav.py runs "
                              "(explore / coordinate / infeasible) instead")
@@ -378,6 +411,8 @@ def main(argv=None):
         if err:
             print(f"skipping: {err}", file=sys.stderr)
             continue
+        if args.merge_roles:
+            summary = merge_per_style(summary)
         runs.append((label_for(summary, d), summary))
     if not runs:
         print("no runs to compare", file=sys.stderr)
