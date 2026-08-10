@@ -1,5 +1,8 @@
 # Are RefON instructions solvable before the robot moves?
 
+*한국어판: [`refon_feasibility_analysis.ko.md`](refon_feasibility_analysis.ko.md) — 프롬프트
+전문과 성공 응답 예시(§10)가 추가로 실려 있습니다.*
+
 A RefON instruction is anaphoric: *"Find A1."*, *"Find the 2nd one again."*, *"Go back to
 the previous one."* A navigation failure on one of those has two possible causes, and the
 navigation score cannot tell them apart:
