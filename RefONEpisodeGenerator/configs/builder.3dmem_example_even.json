@@ -1,0 +1,16 @@
+{
+  "_comment": "builder.3dmem_example.json, pointed at the style-role-balanced set (generator.example_even.json). Same free HM3D example scene (00861-GLAQ4DNUx5U) linked into 3D-Mem's data/hm3d/val/, so paths are relative to the 3D-Mem repo root -- run the CLI from there, or pass --hm3d-root.",
+  "split": "val",
+  "dataset_root": "RefONEpisodeGenerator/out/refon_example_even_dataset/v1",
+  "hm3d_root": "data/hm3d",
+  "compress": true,
+  "_comment_max_objects": "only ~19 of this scene's objects are visible from any navigable point, so the per-episode distinct-object budget has to stay small",
+  "max_objects": 5,
+  "category_whitelist": ["door", "lamp", "pillow", "book", "cardboard box", "clothes", "bathroom accessory", "toilet", "chair", "table", "cabinet", "sink", "shelf", "mirror", "picture", "window", "towel", "stool", "bench", "sofa", "bed", "counter", "basket", "plant"],
+  "viewpoint_min_iou": 0.005,
+  "viewpoint_num_candidates": 80,
+  "viewpoint_max_view_points": 20,
+  "min_geodesic": 1.0,
+  "max_geodesic": 30.0,
+  "seed": 0
+}

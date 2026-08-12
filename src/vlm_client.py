@@ -4,20 +4,24 @@ The evaluation code builds prompts as a list of "content" tuples, where each
 tuple is either ``(text,)`` or ``(text, base64_png_image)``.  A client takes
 such a list plus a system prompt and returns the model response as a string.
 
-Two backends are provided:
+Three backends are provided:
     - "openai": the OpenAI API or any OpenAI-compatible endpoint (GPT-4o, ...)
     - "ollama": a local ollama server, through its OpenAI-compatible /v1 API
+    - "anthropic": the Anthropic API, through the official SDK
 
 The backend and its settings are read from src/const.py, which in turn can be
 overridden with environment variables (see that file).
 """
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import List, Optional, Sequence, Tuple
 
 from src.const import (
+    ANTHROPIC_MODEL,
+    ANTHROPIC_TIMEOUT,
     END_POINT,
     OLLAMA_END_POINT,
     OLLAMA_MODEL,
@@ -41,25 +45,81 @@ class VLMClient(ABC):
         max_tries: int = 5,
         rate_limit_wait: float = 30,
         error_wait: float = 60,
+        empty_response_wait: float = 2,
         temperature: float = 0.7,
         max_tokens: int = 4096,
         top_p: float = 0.95,
+        reasoning_effort: Optional[str] = None,
+        max_length_stops: int = 5,
     ):
         self.model = model
         self.max_tries = max_tries
         self.rate_limit_wait = rate_limit_wait
         self.error_wait = error_wait
+        self.empty_response_wait = empty_response_wait
+        self.reasoning_effort = reasoning_effort
+        #: give up on a model once this many replies were cut off by the token budget
+        self.max_length_stops = max_length_stops
+        self.length_stops = 0
+        self.consecutive_length_stops = 0
+        #: replies declined by a provider policy classifier (Anthropic `stop_reason`)
+        self.refusals = 0
+        self._length_lock = threading.Lock()
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.top_p = top_p
+
+    def note_length_stop(self):
+        """A reply cut off by the token budget. Counted consecutively, on purpose.
+
+        The question itself is a failure either way. What the streak decides is whether
+        the *model* is worth continuing with, and only an unbroken run means "this model
+        cannot answer this task" -- which is what it looked like when qwen3.5:2b was cut
+        off on every single call. Counting cumulatively instead threw away two otherwise
+        healthy runs over a 0.3% blip rate: 5 stops in 1679 answered queries.
+        """
+        with self._length_lock:
+            self.length_stops += 1
+            self.consecutive_length_stops += 1
+            return self.consecutive_length_stops
+
+    def note_good_reply(self):
+        with self._length_lock:
+            self.consecutive_length_stops = 0
+
+    @property
+    def gave_up(self) -> bool:
+        """True once the model was cut off `max_length_stops` times in a row."""
+        return (
+            bool(self.max_length_stops)
+            and self.consecutive_length_stops >= self.max_length_stops
+        )
 
     def call(self, sys_prompt: str, contents: Content) -> Optional[str]:
         """Query the model, retrying on failure. Returns None if all tries fail."""
         retry_count = 0
         while retry_count < self.max_tries:
             try:
-                return self._chat(sys_prompt, contents)
+                response = self._chat(sys_prompt, contents)
+                # An empty body is not an answer. A reasoning model that spends its whole
+                # token budget thinking returns content="" with no exception raised, and
+                # the caller can only score that as a wrong answer -- so retry it like
+                # any other failed try instead of passing the blank through. Observed
+                # sporadically with gemma4:26b (12 of 200 prompts, unrelated to prompt
+                # length); a plain retry is usually enough.
+                if response is not None and not str(response).strip():
+                    print("Empty response from the model, retrying")
+                    time.sleep(self.empty_response_wait)
+                    retry_count += 1
+                    continue
+                return response
             except Exception as e:
+                if self._is_permanent_error(e):
+                    # A malformed request is malformed on every attempt. Retrying it
+                    # five times 60s apart turned one bad parameter into a run that
+                    # never finished -- fail the question and move on.
+                    print(f"Permanent request error, not retrying: {e}")
+                    return None
                 wait = self.error_wait
                 if self._is_rate_limit_error(e):
                     print(f"Rate limit error, waiting for {self.rate_limit_wait}s")
@@ -78,6 +138,11 @@ class VLMClient(ABC):
 
     def _is_rate_limit_error(self, e: Exception) -> bool:
         return False
+
+    def _is_permanent_error(self, e: Exception) -> bool:
+        """A client-side error that will fail identically on every retry (400/404/422)."""
+        status = getattr(e, "status_code", None)
+        return status in (400, 404, 422)
 
 
 class OpenAIClient(VLMClient):
@@ -122,8 +187,16 @@ class OpenAIClient(VLMClient):
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": self.format_content(contents)},
         ]
+        extra = {}
+        if self.reasoning_effort is not None:
+            # A reasoning model can spend the whole budget thinking and return empty
+            # content. qwen3.5:0.8b did exactly that on this task: 16384 completion
+            # tokens, 66k characters of `reasoning`, content "", 240s per call. With
+            # reasoning_effort="none" the same prompt answers in 0.5s and 46 tokens.
+            extra["reasoning_effort"] = self.reasoning_effort
         completion = self.client.chat.completions.create(
             model=self.model,
+            extra_body=extra or None,
             messages=message_text,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -132,7 +205,15 @@ class OpenAIClient(VLMClient):
             presence_penalty=0,
             stop=None,
         )
-        return completion.choices[0].message.content
+        choice = completion.choices[0]
+        if choice.finish_reason == "length":
+            # Ran out of budget mid-answer. Retrying is pointless -- the same prompt
+            # gets the same truncation -- so this is a failed question, and a model that
+            # keeps doing it is not answering this task at all.
+            self.note_length_stop()
+            return None
+        self.note_good_reply()
+        return choice.message.content
 
     def _is_rate_limit_error(self, e: Exception) -> bool:
         return isinstance(e, self._openai.RateLimitError)
@@ -176,9 +257,100 @@ class OllamaClient(OpenAIClient):
             )
 
 
+class AnthropicClient(VLMClient):
+    """The Anthropic API, through the official SDK.
+
+    Not an OpenAI-compatible shim: the request shape differs enough that reusing
+    OpenAIClient would misreport the two things this repo's runners depend on --
+    a reply cut off by the token budget, and an empty body.
+    """
+
+    def __init__(self, model=None, timeout=None, effort=None, **kwargs):
+        super().__init__(model=model or ANTHROPIC_MODEL, **kwargs)
+        import anthropic
+
+        self._anthropic = anthropic
+        # No api_key argument: the SDK resolves ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN
+        # or an `ant auth login` profile on its own, and passing an empty string would
+        # shadow all three.
+        self.client = anthropic.Anthropic(
+            timeout=ANTHROPIC_TIMEOUT if timeout is None else timeout
+        )
+        #: output_config.effort, when the model supports it. Haiku 4.5 rejects it.
+        self.effort = effort
+
+    @staticmethod
+    def format_content(contents: Content) -> List[dict]:
+        blocks = []
+        for c in contents:
+            blocks.append({"type": "text", "text": c[0]})
+            if len(c) == 2:
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": c[1],
+                        },
+                    }
+                )
+        return blocks
+
+    def _chat(self, sys_prompt: str, contents: Content) -> str:
+        params = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": sys_prompt,
+            "messages": [{"role": "user", "content": self.format_content(contents)}],
+        }
+        # Sampling: temperature only, never alongside top_p -- every Claude 4+ model
+        # 400s on "`temperature` and `top_p` cannot both be specified". Opus 4.7+ /
+        # Sonnet 5 / Fable 5 reject sampling parameters entirely, so they get neither.
+        if not self._drops_sampling_params():
+            params["temperature"] = self.temperature
+        if self.effort:
+            params["output_config"] = {"effort": self.effort}
+        if self.reasoning_effort == "none":
+            # the cross-provider "turn thinking off" switch; on models where thinking
+            # is on by default this is what keeps the run cheap
+            params["thinking"] = {"type": "disabled"}
+
+        # Stream: the SDK refuses non-streaming requests whose max_tokens implies a
+        # long generation, and these configs run at 32768.
+        with self.client.messages.stream(**params) as stream:
+            message = stream.get_final_message()
+
+        if message.stop_reason == "max_tokens":
+            self.note_length_stop()
+            return None
+        if message.stop_reason == "refusal":
+            # A policy decline, not an outage. Return None rather than "" so it skips
+            # the empty-body retry -- the same prompt gets the same decline, and five
+            # 2s retries per refused question would only slow the run down. It lands in
+            # the records as an unanswered question, same as any other empty body.
+            self.refusals += 1
+            print(f"Refusal from {self.model} (stop_reason=refusal); scoring as no answer")
+            self.note_good_reply()
+            return None
+        self.note_good_reply()
+        return "".join(b.text for b in message.content if b.type == "text")
+
+    def _drops_sampling_params(self) -> bool:
+        m = self.model
+        return any(
+            tag in m
+            for tag in ("opus-4-7", "opus-4-8", "opus-5", "sonnet-5", "fable-5", "mythos-5")
+        )
+
+    def _is_rate_limit_error(self, e: Exception) -> bool:
+        return isinstance(e, self._anthropic.RateLimitError)
+
+
 BACKENDS = {
     "openai": OpenAIClient,
     "ollama": OllamaClient,
+    "anthropic": AnthropicClient,
 }
 
 

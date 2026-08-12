@@ -1,0 +1,29 @@
+{
+  "_comment": "Long-episode variant of generator.example_even.json: same style balancing, lengths spread evenly over 5..50 instead of 4..8. The point is the history the agent has to carry -- at length 50 a back reference can point 45 instructions back, where the 4-8 set never asked for more than 7. The even spread over six lengths also gives an SR-against-episode-length curve rather than a single number. 115 episodes generated to land near 100 after the builder drops what it cannot place.",
+  "length_ratios": {
+    "5": 1,
+    "14": 1,
+    "23": 1,
+    "32": 1,
+    "41": 1,
+    "50": 1
+  },
+  "ab_distance_ratios": {},
+  "or_distance_ratios": {},
+  "episodes_per_scene": 115,
+  "num_scenes": 1,
+  "goal_absent_ratio": 0.15,
+  "style_weights": {},
+  "even_styles": true,
+  "max_length": 50,
+  "refine_iterations": 200,
+  "prune_fraction": 0.2,
+  "refill_oversample": 8,
+  "balance_weights": {
+    "length": 3.0,
+    "ab_distance": 0.0,
+    "or_distance": 0.0,
+    "styles": 2.0
+  },
+  "seed": 0
+}

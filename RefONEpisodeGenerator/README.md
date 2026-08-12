@@ -288,6 +288,40 @@ builder and the evaluator load the scene through the identical file.
 > the goal pool fast: `0.001` → 32% usable, `0.005` → 20%, `0.05` → 8%. `0.005` is the
 > working default.
 
+##### 200 episodes with the instruction styles balanced
+
+30 episodes on one scene leaves some styles with a handful of samples, so a per-style SR
+is mostly noise. `configs/generator.example_even.json` builds a 200-episode set on the
+same scene with every style at a comparable count:
+
+```bash
+python RefONEpisodeGenerator/main.py generate \
+    -o RefONEpisodeGenerator/out/refon_example_even \
+    --config RefONEpisodeGenerator/configs/generator.example_even.json
+python RefONEpisodeGenerator/main.py build \
+    -i RefONEpisodeGenerator/out/refon_example_even --scenes GLAQ4DNUx5U \
+    --builder-config RefONEpisodeGenerator/configs/builder.3dmem_example_even.json
+```
+
+Two settings do the work, and neither is specific to this scene:
+
+- **`balance_weights.styles`** raised to 4.0 (from 0.3) makes style evenness dominate the
+  balancer's fit error; `ab_distance` / `or_distance` are dropped to 0 so the prune/refill
+  loop spends its freedom on the style dimension.
+- **`length_ratios` lean long** (4–8, mode 8). This matters more than the weight: a
+  length-2 or length-3 list has almost no room for `AR_post` (needs an `AR_pre` plus one
+  intervening subgoal) or `AB_pre+OR_post` (needs a prior visit), so short episodes are
+  what force `S` to dominate.
+
+Result over the 200 built episodes (1308 subtasks): 12.7%–17.2% per style against a 14.3%
+uniform target, versus 5.9%–20.6% under the default config. The residual `AB_post` surplus
+is structural and does not respond to `style_weights` — one alias bound by `AB_pre` can be
+referenced by more than one `AB_post`, so those tokens outnumber their binders by design.
+
+`episodes_per_scene` is 230, not 200: the builder drops the lists it cannot place in the
+scene (~13% here, and this scene has only ~19 usable goal objects), and 230 is what lands
+on 200 built episodes.
+
 Then generate and build:
 
 ```bash
@@ -334,8 +368,8 @@ Before asking whether the agent can *navigate* to a referent, it is worth knowin
 whether the referent is recoverable from the instructions at all. That is what
 `run_refonbench_feasibility.py` measures: no habitat, no images, no navigation — the VLM
 sees only the episode's instructions and answers, for one of them, *which object it is
-being sent to* (`"new"`, the number of the instruction that introduced the object, or
-`"none"`).
+being sent to* — as the number of the instruction that first mentioned that object (its
+own number when it is the first, `0` when it names no object).
 
 ```bash
 python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml
@@ -354,8 +388,25 @@ python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml --
 - **`GA_*` subtasks are scored here**, unlike in the navigation runner: "refers to no
   object" is a perfectly checkable answer even though "stop" is not a reachable target.
   `--skip-goal-absent` drops them.
-- Output: `feasibility_records_<mode>.jsonl` (one row per subgoal, with the raw model
-  reply) and `feasibility_results_<mode>.json` under `results/<exp_name>/`.
+- Output goes to `results/<exp_name>_<model slug>/`, so running the same config against a
+  different model does not overwrite the first one. Compare runs with
+  `python scripts/compare_feasibility.py results/exp_feasibility_refonbench_*`, adding
+  `--first-episodes N` when one run was cut short with `--episodes-per-scene N`.
+- Files written under `results/<exp_name>_<model>/`: `feasibility_records_<mode>.jsonl` (one row per
+  subgoal, with the raw model reply), `feasibility_results_<mode>.json`, and
+  `feasibility_failures_<mode>.log` — the full exchange (system prompt, user prompt,
+  reply) for every wrong answer, grouped so one `all_at_once` reply that got three
+  subgoals wrong is one transcript rather than three copies.
+
+The answer is a label (`new` / `back_reference` / `no_object`) plus a number only when
+the label is `back_reference`. That split is not cosmetic. Asked for a bare instruction
+number, qwen2.5vl:7b pointed at some earlier instruction for 231 of 534 fresh objects;
+offered `"new"` as one of the values that same field could take, it answered `"new"` for
+373 back-references, 279 of which still named the true referent's category. Whichever
+single field carries both decisions, one class gets swallowed. Classifying first and
+numbering second keeps the two apart — but see the caveat below: on a 7B model the
+headline SR still moves by tens of points with the phrasing, so a feasibility number is
+only comparable against navigation numbers taken with the *same* prompt version.
 
 ### auxiliary — `validate` / `plot`
 

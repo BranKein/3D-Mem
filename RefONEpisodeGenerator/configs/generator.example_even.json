@@ -1,0 +1,23 @@
+{
+  "_comment": "Single-scene (00861-GLAQ4DNUx5U) set with the instruction styles as evenly represented as the grammar allows. Two knobs do the work: balance_weights.styles dominates the fit error, and length_ratios lean long -- a length-2 or length-3 episode has almost no room for AR_post (needs an AR_pre plus one intervening subgoal) or AB_pre+OR_post (needs a prior visit), so short episodes are what force S to dominate. ab/or distance targets are left off so the balancer spends its freedom on the style dimension.",
+  "length_ratios": {
+    "4": 0.10,
+    "5": 0.18,
+    "6": 0.24,
+    "7": 0.24,
+    "8": 0.24
+  },
+  "ab_distance_ratios": {},
+  "or_distance_ratios": {},
+  "episodes_per_scene": 230,
+  "num_scenes": 1,
+  "goal_absent_ratio": 0.15,
+  "style_weights": {},
+  "even_styles": true,
+  "max_length": 12,
+  "refine_iterations": 200,
+  "prune_fraction": 0.2,
+  "refill_oversample": 8,
+  "balance_weights": {"length": 1.0, "ab_distance": 0.0, "or_distance": 0.0, "styles": 4.0},
+  "seed": 0
+}

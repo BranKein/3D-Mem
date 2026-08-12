@@ -8,8 +8,18 @@ seed: 77
 exp_name: "exp_feasibility_refonbench"
 output_parent_dir: "results"
 
+# Append the configured model to the output directory name, so results/<exp_name>_<model>
+# says which model produced them (e.g. exp_feasibility_refonbench_qwen2_5vl_7b). The
+# model is the single biggest factor in these numbers, so keep this on unless you are
+# deliberately overwriting one directory across models.
+append_model_to_exp_name: true
+
 # RefONEpisodeGenerator output: <dataset_root>/<split>/content/, .json or .json.gz.
-test_data_dir: "RefONEpisodeGenerator/out/refon_example_dataset/v1/val/content/"
+# The 200-episode style-balanced set (configs/generator.example_even.json), which is what
+# the per-style SRs need to have comparable sample counts. The original 30-episode
+# smoke-test set is at .../refon_example_dataset/..., and the long-episode set has its
+# own config, cfg/eval_refonbench_feasibility_long.yaml.
+test_data_dir: "RefONEpisodeGenerator/out/refon_example_even_dataset/v1/val/content/"
 
 # null/0 means "use every episode of every shard".
 episodes_per_scene: null
@@ -27,6 +37,19 @@ include_goal_absent: true
 
 # Reference resolution is not a creative task -- keep sampling off so re-runs match.
 temperature: 0.0
+
+# Reasoning models spend the token budget before they answer: the chain of thought goes
+# to message.reasoning and content comes back empty when the budget runs out, which the
+# scorer can only read as a wrong answer. At the client default of 4096, gemma4:26b
+# returned nothing for 61 of 200 all_at_once episodes; qwen3-vl:8b needs ~5k tokens of
+# thinking before it answers at all. A model that still cannot finish inside this is
+# dropped rather than scored -- see max_length_stops.
+max_tokens: 32768
+
+# Give up on a model after this many replies are cut off by the budget (finish_reason
+# "length"). Those questions are failures that measure the budget rather than the model,
+# so a run full of them is not worth reporting: the runner writes no results and exits 3.
+max_length_stops: 5
 
 # scripts/summarize_refonbench.py folds AB_pre / AR_pre into S, because as a navigation
 # task they are a plain "go to this object". Resolving them is not the same job (the
