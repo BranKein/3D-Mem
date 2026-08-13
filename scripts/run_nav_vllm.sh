@@ -124,11 +124,20 @@ for MODEL in "${MODEL_LIST[@]}"; do
     CUDA_VISIBLE_DEVICES="$EVAL_GPU" VLM_PROVIDER=vllm VLLM_MODEL="$SERVED" VLLM_TIMEOUT=1800 \
         "$PY" run_refonbench_evaluation.py -cf "$CFG" --exp-name "$EXP" "${extra[@]}" \
         > "$RUNLOG" 2>&1
-    echo "  exit $?"
-
-    # The single most useful thing to look at before trusting any number: an empty
-    # reply is scored as a wrong answer, so a run can look finished and mean nothing.
-    grep -acE "call_vlm_api returns None" "$RUNLOG" | sed 's/^/  empty replies: /'
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        # Do not print reply statistics for a run that never got as far as a reply --
+        # "empty replies: 0" on a crashed run reads like success.
+        echo "  FAILED (exit $rc). Last lines of $RUNLOG:"
+        grep -anE "Error|Traceback|No such file|not found|CUDA|assert" "$RUNLOG" | tail -10
+        echo "  ---"
+        tail -25 "$RUNLOG"
+    else
+        echo "  exit 0"
+        # An empty reply scores as a wrong answer, so a run can look finished and mean
+        # nothing. This is the first number to look at.
+        grep -acE "call_vlm_api returns None" "$RUNLOG" | sed 's/^/  empty replies: /'
+    fi
     stop_server
 done
 
