@@ -600,6 +600,12 @@ if __name__ == "__main__":
     # Get config path
     parser = argparse.ArgumentParser()
     parser.add_argument("-cf", "--cfg_file", help="cfg file path", default="", type=str)
+    parser.add_argument(
+        "--exp-name", default=None,
+        help="overrides cfg.exp_name, and with it the results/ directory. The model "
+             "is not part of the name otherwise, so running several models against "
+             "the same config would have them overwrite each other.",
+    )
     parser.add_argument("--start_ratio", help="start ratio", default=0.0, type=float)
     parser.add_argument("--end_ratio", help="end ratio", default=1.0, type=float)
     parser.add_argument(
@@ -635,6 +641,8 @@ if __name__ == "__main__":
     prompt_version = prompts.get(cfg.get("prompt_version", None))
 
     # Set up logging
+    if args.exp_name:
+        cfg.exp_name = args.exp_name
     cfg.output_dir = os.path.join(cfg.output_parent_dir, cfg.exp_name)
     if not os.path.exists(cfg.output_dir):
         os.makedirs(cfg.output_dir, exist_ok=True)  # recursive

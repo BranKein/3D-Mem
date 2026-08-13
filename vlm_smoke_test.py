@@ -1,8 +1,10 @@
-"""Smoke test for a candidate ollama VLM against the real 3D-Mem prompts.
+"""Smoke test for a candidate local VLM against the real 3D-Mem prompts.
 
 Run from the repo root, e.g.:
     VLM_PROVIDER=ollama OLLAMA_MODEL=gemma4:26b-a4b-it-qat \
-        ~/anaconda3/envs/3dmem/bin/python smoke_test.py
+        ~/anaconda3/envs/3dmem/bin/python vlm_smoke_test.py
+    VLM_PROVIDER=vllm VLLM_MODEL=Qwen3.5-9B \
+        ~/anaconda3/envs/3dmem/bin/python vlm_smoke_test.py
 
 Checks, in order:
   0. server reachable, model loaded, effective context length
@@ -25,7 +27,13 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from src.const import OLLAMA_END_POINT, OLLAMA_MODEL
+from src.const import (
+    OLLAMA_END_POINT,
+    OLLAMA_MODEL,
+    VLLM_END_POINT,
+    VLLM_MODEL,
+    VLM_PROVIDER,
+)
 from src.eval_utils_gpt_goatbench import (
     call_vlm_api,
     format_explore_prompt,
@@ -73,7 +81,25 @@ def vram_used_mb() -> int:
     return int(out.stdout.strip().splitlines()[0])
 
 
-def ollama_ps() -> str:
+def backend_id() -> tuple:
+    """(model, endpoint) for whichever local backend is configured."""
+    if VLM_PROVIDER.lower() == "vllm":
+        return VLLM_MODEL, VLLM_END_POINT
+    return OLLAMA_MODEL, OLLAMA_END_POINT
+
+
+def loaded_model() -> str:
+    """What the server actually has resident, when it can say.
+
+    `/api/ps` is an ollama extension. vLLM has no equivalent -- it loads one model at
+    startup and holds it, and its own startup log is where the KV cache size and the
+    effective context length are reported.
+    """
+    if VLM_PROVIDER.lower() != "ollama":
+        return (
+            f"  ({VLM_PROVIDER} has no /api/ps; the vram reading above and the server's "
+            f"own startup log are the check)"
+        )
     import urllib.request
     try:
         with urllib.request.urlopen(f"{OLLAMA_END_POINT}/api/ps", timeout=10) as r:
@@ -261,19 +287,21 @@ def test_prefiltering():
 
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    print(f"model   : {OLLAMA_MODEL}")
-    print(f"endpoint: {OLLAMA_END_POINT}")
+    _model, _end_point = backend_id()
+    print(f"provider: {VLM_PROVIDER}")
+    print(f"model   : {_model}")
+    print(f"endpoint: {_end_point}")
     print(f"vram before load: {vram_used_mb()} MiB")
 
     results = []
     results.append(("alignment", *test_alignment()))
-    print("\n--- ollama /api/ps after load ---")
-    print(ollama_ps())
+    print("\n--- loaded model after first call ---")
+    print(loaded_model())
     results.append(("explore format", *test_real_explore()))
     results.append(("prefiltering", *test_prefiltering()))
 
     print("\n================ SUMMARY ================")
     for name, ok, total in results:
         print(f"  {name:<16} {ok}/{total}")
-    print("\n--- final /api/ps ---")
-    print(ollama_ps())
+    print("\n--- loaded model at the end ---")
+    print(loaded_model())

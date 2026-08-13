@@ -445,6 +445,7 @@ def main(cfg, dry_run: bool = False):
     client = create_vlm_client(
         temperature=cfg.get("temperature", 0.0),
         max_tokens=cfg.get("max_tokens", 16384),
+        presence_penalty=cfg.get("presence_penalty", 0.0),
         reasoning_effort=cfg.get("reasoning_effort", None),
         max_length_stops=int(cfg.get("max_length_stops", 5)),
     )
@@ -526,6 +527,8 @@ if __name__ == "__main__":
     parser.add_argument("-cf", "--cfg_file", default="", type=str)
     parser.add_argument("--episodes-per-scene", type=int, default=None)
     parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--temperature", type=float, default=None, help='sampling temperature; overrides cfg. Thinking models need a nonzero value: greedy decoding sends Qwen3.5 into a repetition loop that burns the whole token budget (measured: 32768 tokens, empty content, every query). Qwen recommends 0.6 with thinking on.')
+    parser.add_argument("--presence-penalty", type=float, default=None, help='presence_penalty; overrides cfg. The brake on a thinking model that loops instead of answering -- measured on Qwen3.5-2B over 23 real prompts, 1.5 takes truncation from 11/23 to 1/23. Raising max_tokens does not help (13/23 truncated at 60k): it is a repetition loop, not a budget shortfall.')
     parser.add_argument("--test-data-dir", default=None)
     parser.add_argument(
         "--reasoning-effort",
@@ -542,6 +545,10 @@ if __name__ == "__main__":
         cfg.episodes_per_scene = args.episodes_per_scene
     if args.workers is not None:
         cfg.workers = args.workers
+    if args.temperature is not None:
+        cfg.temperature = args.temperature
+    if args.presence_penalty is not None:
+        cfg.presence_penalty = args.presence_penalty
     if args.test_data_dir is not None:
         cfg.test_data_dir = args.test_data_dir
 

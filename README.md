@@ -113,7 +113,7 @@ The test questions of A-EQA and GOAT-Bench are provided in the `data/` folder. F
 For GOAT-Bench, we include the complete `val_unseen` split in this repository.
 
 #### VLM Setup
-The evaluation prompts a vision-language model at each step. Two backends are supported, selected with `VLM_PROVIDER` in `src/const.py` (every setting there can also be overridden with the environment variable of the same name):
+The evaluation prompts a vision-language model at each step. Four backends are supported, selected with `VLM_PROVIDER` in `src/const.py` (every setting there can also be overridden with the environment variable of the same name):
 
 **OpenAI (default, `VLM_PROVIDER = "openai"`)**: set the endpoint and API key in `src/const.py` (`END_POINT`, `OPENAI_KEY`). Leave `END_POINT` empty to use the official API. The model is `OPENAI_MODEL` (default `gpt-4o`). This backend also works with any OpenAI-compatible server (vLLM, LiteLLM, ...).
 
@@ -127,6 +127,25 @@ Relevant settings: `OLLAMA_END_POINT` (default `http://localhost:11434`), `OLLAM
 Two things to watch out for:
 - The model **must** be a vision model, and each prompt contains many images, so the server's context length must be large. Context length is a server setting, not a per-request one: start the server with `OLLAMA_CONTEXT_LENGTH=32768 ollama serve` (or add it to the systemd unit), and check what a loaded model actually got with `curl -s localhost:11434/api/ps`. Anything beyond the context window is silently truncated. Lowering `prompt_h`/`prompt_w` and `top_k_categories` in the config keeps the prompt smaller.
 - This backend uses ollama's OpenAI-compatible `/v1` API on purpose. The native `/api/chat` endpoint passes images as a separate list rather than interleaved with the text, and the model then cannot tell which image belongs to which `Snapshot i` label.
+
+**vLLM (`VLM_PROVIDER = "vllm"`)**: also a local server, but one model per process and every size fixed at startup. Start it with the helper script, which sets the flags that matter, then point a run at it:
+```bash
+scripts/vllm_setup.sh Qwen/Qwen3.5-9B      # in the vllm environment
+VLM_PROVIDER=vllm VLLM_MODEL=Qwen3.5-9B python run_refonbench_feasibility.py -cf cfg/eval_refonbench_feasibility.yaml
+```
+Relevant settings: `VLLM_END_POINT` (default `http://localhost:8000`), `VLLM_MODEL`, `VLLM_TIMEOUT`.
+
+Four things differ from ollama, and each one silently ruins a run if missed:
+- **Install vLLM in its own environment.** The `3dmem` env is pinned to python 3.9 / torch 2.0.1+cu118 / pytorch3d-pyt201 for habitat, and vLLM needs newer. It does not need to share one: this repo only talks to it over HTTP, so `3dmem` needs nothing beyond the `openai` package it already has.
+- **`--max-model-len` bounds prompt + completion together**, so it has to cover `cfg.max_tokens` (32768) on top of the prompt. Being text-only does not make a probe cheap here — the completion budget dominates. vLLM refuses to start rather than degrade if the KV cache cannot hold one sequence of that length; ollama would have offloaded to CPU and carried on.
+- **`--reasoning-parser` is required when thinking is on.** It moves the chain of thought to `reasoning_content` and leaves the answer alone in `content`. Without it the reply is `<think>...</think>` glued to the JSON and every answer scores as `parse_failed`. `VllmClient` strips the tags as a fallback and warns loudly, but a reply cut off mid-thought has no closing tag and cannot be recovered.
+- **`reasoning_effort` is not the thinking switch here.** vLLM reads it as a request to *enable* thinking, so `--reasoning-effort none` is translated into the chat template argument vLLM actually reads (`enable_thinking: false`). The flag keeps one meaning across backends, but the translation only exists in `VllmClient` — a run pointed at vLLM through the plain `openai` backend would turn thinking on while claiming to turn it off.
+
+vLLM defaults to bf16, where ollama defaults to a 4-bit quantisation, so the same model is roughly 4x larger here: `Qwen/Qwen3.5-9B` is 18.1 GiB in bf16 against 6.6 GB as `qwen3.5:9b`. On a 24 GiB card that leaves too little for the KV cache, so the script serves fp8 (9.0 GiB), converted from the bf16 checkpoint at load time — Qwen ships prebuilt FP8 weights only from 27B up, and the RTX 4090 runs fp8 natively. 2B and 4B fit in bf16 either way (`QUANTIZATION= scripts/vllm_setup.sh Qwen/Qwen3.5-4B`).
+
+Results from a vLLM run land in `results/<exp_name>_<model>_vllm/`. The suffix is deliberate: same model name, different quantisation and thinking on by default, so the numbers are not comparable with an ollama run and must not be globbed together with it.
+
+**Anthropic (`VLM_PROVIDER = "anthropic"`)**: the Anthropic API through the official SDK, which resolves the key itself from `ANTHROPIC_API_KEY` — there is no key setting in `src/const.py`. The model is `ANTHROPIC_MODEL` (default `claude-haiku-4-5`); `ANTHROPIC_TIMEOUT` applies. `--reasoning-effort none` maps to `thinking: disabled`.
 
 To check that the configured backend answers:
 ```bash

@@ -445,14 +445,34 @@ def model_slug() -> str:
 
     Read from src.const rather than from a live client, so --dry-run names its output
     directory the same way a real run would.
-    """
-    from src.const import ANTHROPIC_MODEL, OLLAMA_MODEL, OPENAI_MODEL, VLM_PROVIDER
 
+    vLLM runs get a ``_vllm`` suffix. The same model served by vLLM rather than ollama
+    is not the same measurement -- ollama serves a 4-bit quantisation and vLLM is
+    usually run at fp8 or bf16, and thinking is on by default -- so the two must not
+    land in one directory or be globbed together by the comparison scripts.
+    """
+    from src.const import (
+        ANTHROPIC_MODEL,
+        OLLAMA_MODEL,
+        OPENAI_MODEL,
+        VLLM_MODEL,
+        VLM_PROVIDER,
+    )
+
+    provider = (VLM_PROVIDER or "").lower()
     name = {
         "ollama": OLLAMA_MODEL,
+        "vllm": VLLM_MODEL,
         "anthropic": ANTHROPIC_MODEL,
-    }.get((VLM_PROVIDER or "").lower(), OPENAI_MODEL)
-    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", str(name).lower())).strip("_")
+    }.get(provider, OPENAI_MODEL)
+    # vLLM names a model by its HuggingFace repo id ("Qwen/Qwen3.5-9B"); the org half
+    # says nothing about which model answered, and dropping it keeps the tag lined up
+    # with the ollama runs ("qwen3.5:9b" -> qwen3_5_9b).
+    name = str(name).rsplit("/", 1)[-1]
+    slug = re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", name.lower())).strip("_")
+    if slug and provider == "vllm":
+        slug = f"{slug}_vllm"
+    return slug
 
 
 def sort_roles(roles) -> List[str]:
@@ -707,6 +727,7 @@ def main(cfg, mode: str, dry_run: bool = False):
     client = create_vlm_client(
         temperature=cfg.get("temperature", 0.0),
         max_tokens=cfg.get("max_tokens", 16384),
+        presence_penalty=cfg.get("presence_penalty", 0.0),
         reasoning_effort=cfg.get("reasoning_effort", None),
         max_length_stops=int(cfg.get("max_length_stops", 5)),
     )
@@ -803,6 +824,13 @@ if __name__ == "__main__":
         "--workers", type=int, default=None, help="parallel VLM calls; overrides cfg"
     )
     parser.add_argument(
+        "--temperature", type=float, default=None,
+        help='sampling temperature; overrides cfg. Thinking models need a nonzero value: greedy decoding sends Qwen3.5 into a repetition loop that burns the whole token budget (measured: 32768 tokens, empty content, every query). Qwen recommends 0.6 with thinking on.'
+    )
+    parser.add_argument(
+        "--presence-penalty", type=float, default=None, help='presence_penalty; overrides cfg. The brake on a thinking model that loops instead of answering -- measured on Qwen3.5-2B over 23 real prompts, 1.5 takes truncation from 11/23 to 1/23. Raising max_tokens does not help (13/23 truncated at 60k): it is a repetition loop, not a budget shortfall.'
+    )
+    parser.add_argument(
         "--test-data-dir", default=None, help="shard directory; overrides cfg"
     )
     parser.add_argument(
@@ -837,6 +865,10 @@ if __name__ == "__main__":
         cfg.episodes_per_scene = args.episodes_per_scene
     if args.workers is not None:
         cfg.workers = args.workers
+    if args.temperature is not None:
+        cfg.temperature = args.temperature
+    if args.presence_penalty is not None:
+        cfg.presence_penalty = args.presence_penalty
     if args.test_data_dir is not None:
         cfg.test_data_dir = args.test_data_dir
     if args.skip_goal_absent:

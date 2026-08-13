@@ -4,9 +4,10 @@ The evaluation code builds prompts as a list of "content" tuples, where each
 tuple is either ``(text,)`` or ``(text, base64_png_image)``.  A client takes
 such a list plus a system prompt and returns the model response as a string.
 
-Three backends are provided:
+Four backends are provided:
     - "openai": the OpenAI API or any OpenAI-compatible endpoint (GPT-4o, ...)
     - "ollama": a local ollama server, through its OpenAI-compatible /v1 API
+    - "vllm": a local vLLM server, through its OpenAI-compatible /v1 API
     - "anthropic": the Anthropic API, through the official SDK
 
 The backend and its settings are read from src/const.py, which in turn can be
@@ -14,6 +15,7 @@ overridden with environment variables (see that file).
 """
 
 import logging
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -28,6 +30,13 @@ from src.const import (
     OLLAMA_TIMEOUT,
     OPENAI_KEY,
     OPENAI_MODEL,
+    VLM_MAX_TOKENS,
+    VLM_PRESENCE_PENALTY,
+    VLM_REASONING_EFFORT,
+    VLM_TEMPERATURE,
+    VLLM_END_POINT,
+    VLLM_MODEL,
+    VLLM_TIMEOUT,
     VLM_PROVIDER,
 )
 
@@ -49,6 +58,7 @@ class VLMClient(ABC):
         temperature: float = 0.7,
         max_tokens: int = 4096,
         top_p: float = 0.95,
+        presence_penalty: float = 0.0,
         reasoning_effort: Optional[str] = None,
         max_length_stops: int = 5,
     ):
@@ -68,6 +78,12 @@ class VLMClient(ABC):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.top_p = top_p
+        #: Repetition brake. A thinking model can fall into a loop that never emits a
+        #: closing </think>, burning the whole budget for an empty `content`. Raising
+        #: max_tokens makes that worse, not better -- measured on Qwen3.5-2B over 23
+        #: real prompts: 11/23 truncated at 32k, 13/23 at 60k. presence_penalty 1.5
+        #: takes it to 1/23, and with temperature 0.7 to 0/23.
+        self.presence_penalty = presence_penalty
 
     def note_length_stop(self):
         """A reply cut off by the token budget. Counted consecutively, on purpose.
@@ -182,18 +198,22 @@ class OpenAIClient(VLMClient):
                 )
         return formated_content
 
+    def _extra_body(self) -> dict:
+        """Non-standard request fields. Overridden where thinking is controlled differently."""
+        if self.reasoning_effort is None:
+            return {}
+        # A reasoning model can spend the whole budget thinking and return empty
+        # content. qwen3.5:0.8b did exactly that on this task: 16384 completion
+        # tokens, 66k characters of `reasoning`, content "", 240s per call. With
+        # reasoning_effort="none" the same prompt answers in 0.5s and 46 tokens.
+        return {"reasoning_effort": self.reasoning_effort}
+
     def _chat(self, sys_prompt: str, contents: Content) -> str:
         message_text = [
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": self.format_content(contents)},
         ]
-        extra = {}
-        if self.reasoning_effort is not None:
-            # A reasoning model can spend the whole budget thinking and return empty
-            # content. qwen3.5:0.8b did exactly that on this task: 16384 completion
-            # tokens, 66k characters of `reasoning`, content "", 240s per call. With
-            # reasoning_effort="none" the same prompt answers in 0.5s and 46 tokens.
-            extra["reasoning_effort"] = self.reasoning_effort
+        extra = self._extra_body()
         completion = self.client.chat.completions.create(
             model=self.model,
             extra_body=extra or None,
@@ -202,7 +222,7 @@ class OpenAIClient(VLMClient):
             max_tokens=self.max_tokens,
             top_p=self.top_p,
             frequency_penalty=0,
-            presence_penalty=0,
+            presence_penalty=self.presence_penalty,
             stop=None,
         )
         choice = completion.choices[0]
@@ -217,6 +237,23 @@ class OpenAIClient(VLMClient):
 
     def _is_rate_limit_error(self, e: Exception) -> bool:
         return isinstance(e, self._openai.RateLimitError)
+
+    def _warn_if_model_missing(self, server: str, fix: str):
+        """Fail loudly at startup instead of after the first prompt.
+
+        Only used by the local backends: a self-hosted server serves a known, short
+        list of models, so a typo in the name is worth catching before a run starts.
+        """
+        try:
+            available = [m.id for m in self.client.models.list().data]
+        except Exception as e:
+            logger.warning(f"Could not reach the {server} server at {self.client.base_url}: {e}")
+            return
+        if self.model not in available:
+            logger.warning(
+                f"Model '{self.model}' is not available in {server} (found: {available}). "
+                f"{fix}"
+            )
 
 
 class OllamaClient(OpenAIClient):
@@ -241,20 +278,97 @@ class OllamaClient(OpenAIClient):
             timeout=OLLAMA_TIMEOUT if timeout is None else timeout,
             **kwargs,
         )
-        self._warn_if_model_missing()
+        self._warn_if_model_missing("ollama", f"Run `ollama pull {self.model}` first.")
 
-    def _warn_if_model_missing(self):
-        """Fail loudly at startup instead of after the first prompt."""
-        try:
-            available = [m.id for m in self.client.models.list().data]
-        except Exception as e:
-            logger.warning(f"Could not reach the ollama server at {self.client.base_url}: {e}")
-            return
-        if self.model not in available:
+
+class VllmClient(OpenAIClient):
+    """A local vLLM server, through its OpenAI-compatible /v1 API.
+
+    Thinking is left on. `reasoning_effort` is not the switch here that it is on
+    ollama: vLLM reads it as a request to *enable* thinking, so passing "none"
+    through would turn thinking on rather than off. The switch vLLM actually reads
+    is a chat template argument, so `--reasoning-effort none` is translated into
+    that instead -- the same thing AnthropicClient does with `thinking: disabled`,
+    so the flag keeps one meaning across all four backends.
+
+    Two settings belong on the server rather than on the request:
+
+      --max-model-len bounds prompt + completion together, so it has to cover
+      cfg.max_tokens (32768 in the feasibility configs) on top of the prompt. A
+      text-only probe does not make this cheap: the completion budget dominates.
+
+      --reasoning-parser splits the chain of thought into `reasoning_content` and
+      leaves the answer alone in `content`. Without it a thinking model returns
+      `<think>...</think>` glued to the answer, and every reply fails to parse.
+
+    See scripts/vllm_setup.sh, which sets both.
+    """
+
+    #: a chain of thought that arrived in `content` because the server has no
+    #: --reasoning-parser. Non-greedy, so only the first block is taken per match.
+    _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+    #: the shape Qwen3.5 actually emits: the chat template opens the block in the
+    #: prompt, so the reply carries a closing `</think>` with no opener before it.
+    #: Everything up to that closer is the chain of thought.
+    _UNOPENED_THINK_RE = re.compile(r"^.*?</think>\s*", re.DOTALL)
+
+    def __init__(self, model=None, end_point=None, timeout=None, **kwargs):
+        end_point = VLLM_END_POINT if end_point is None else end_point
+        super().__init__(
+            model=model or VLLM_MODEL,
+            end_point=f"{end_point.rstrip('/')}/v1",
+            api_key="vllm",  # vLLM ignores the key unless started with --api-key
+            timeout=VLLM_TIMEOUT if timeout is None else timeout,
+            **kwargs,
+        )
+        self._warned_think = False
+        self._warn_if_model_missing(
+            "vllm",
+            "vLLM serves one model per process, named by the argument it was "
+            "started with (or --served-model-name); set VLLM_MODEL to the name above.",
+        )
+
+    def _extra_body(self) -> dict:
+        # Thinking is asked for explicitly, never left to the model default. Qwen3.5
+        # defaults to thinking OFF, and with --reasoning-parser qwen3 that combination
+        # answers nothing at all: the parser waits for the `</think>` that only a
+        # thinking reply emits, so every answer arrives as reasoning_content with an
+        # empty `content`. Measured on Qwen3.5-2B: 15/15 subgoals empty.
+        if self.reasoning_effort == "none":
+            return {"chat_template_kwargs": {"enable_thinking": False}}
+        if self.reasoning_effort is not None:
+            return {"reasoning_effort": self.reasoning_effort}
+        return {"chat_template_kwargs": {"enable_thinking": True}}
+
+    def _chat(self, sys_prompt: str, contents: Content) -> str:
+        return self._strip_think(super()._chat(sys_prompt, contents))
+
+    def _strip_think(self, content: Optional[str]) -> Optional[str]:
+        """Drop a chain of thought that the server left in `content`.
+
+        Two shapes appear. A matched `<think>...</think>` pair, and -- what Qwen3.5
+        actually emits -- a lone closing `</think>`, because the chat template opens
+        the block in the prompt and only the closer comes back.
+
+        A misconfigured server is worth a loud warning rather than a silent fix: both
+        shapes need that closer, and a reply that runs out of budget mid-thought never
+        emits one, so it still scores as a failure.
+        """
+        if not content or "</think>" not in content:
+            return content
+        if not self._warned_think:
+            self._warned_think = True
             logger.warning(
-                f"Model '{self.model}' is not available in ollama (found: {available}). "
-                f"Run `ollama pull {self.model}` first."
+                "The chain of thought is arriving in `content`, so the server was "
+                "started without --reasoning-parser. Stripping it so the answers parse, "
+                "but restart the server with e.g. `--reasoning-parser qwen3`: a reply "
+                "cut off mid-thought emits no </think> and cannot be recovered, and the "
+                "runner's own JSON scan would take a draft from the reasoning instead "
+                "of the final answer."
             )
+        if "<think>" in content:
+            return self._THINK_RE.sub("", content).strip()
+        return self._UNOPENED_THINK_RE.sub("", content, count=1).strip()
 
 
 class AnthropicClient(VLMClient):
@@ -350,6 +464,7 @@ class AnthropicClient(VLMClient):
 BACKENDS = {
     "openai": OpenAIClient,
     "ollama": OllamaClient,
+    "vllm": VllmClient,
     "anthropic": AnthropicClient,
 }
 
@@ -360,6 +475,18 @@ def create_vlm_client(provider: Optional[str] = None, **kwargs) -> VLMClient:
     Extra keyword arguments are forwarded to the backend, so a caller can e.g.
     use different retry intervals without changing the global configuration.
     """
+    # Environment defaults, for callers with no config to read. Only fills keys the
+    # caller left out, so a runner that passes cfg values still wins.
+    for key, env in (
+        ("max_tokens", VLM_MAX_TOKENS),
+        ("temperature", VLM_TEMPERATURE),
+        ("presence_penalty", VLM_PRESENCE_PENALTY),
+    ):
+        if env is not None and key not in kwargs:
+            kwargs[key] = float(env) if key != "max_tokens" else int(env)
+    if VLM_REASONING_EFFORT is not None and "reasoning_effort" not in kwargs:
+        kwargs["reasoning_effort"] = VLM_REASONING_EFFORT
+
     provider = (provider or VLM_PROVIDER).lower()
     if provider not in BACKENDS:
         raise ValueError(
