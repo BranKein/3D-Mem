@@ -85,6 +85,29 @@ if [ "$CHECK_ONLY" = 1 ]; then
 fi
 
 # --------------------------------------------------------------------------- #
+# The driver caps which CUDA generation can run at all, and it is a host-level
+# thing no container or environment can work around. `pip install vllm` takes the
+# newest release, which is built for CUDA 13 and needs driver r580+; on an older
+# driver it dies in torch._C._cuda_init() before it ever looks at a model:
+#   RuntimeError: The NVIDIA driver on your system is too old (found version 12020)
+# torch 2.10 is the last release whose default PyPI wheel is CUDA 12, and vLLM 0.19.1
+# is the newest release pinned to it. Qwen3.5 landed in vLLM 0.17.0, so 0.17.0-0.19.1
+# is the whole usable window on a CUDA 12 driver.
+DRIVER_MAJOR="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | cut -d. -f1)"
+if [ -z "${VLLM_VERSION:-}" ]; then
+    if [ "${DRIVER_MAJOR:-0}" -ge 580 ]; then
+        VLLM_VERSION=""            # newest
+    else
+        VLLM_VERSION="0.19.1"
+    fi
+fi
+say "driver $DRIVER_MAJOR -> vllm ${VLLM_VERSION:-latest}"
+if [ -n "$VLLM_VERSION" ]; then
+    echo "  driver is below r580, so the CUDA 13 builds cannot start."
+    echo "  pinning vllm==$VLLM_VERSION (torch 2.10, CUDA 12). Override with VLLM_VERSION=."
+    echo "  A driver update to r580+ would let you run the newest vLLM instead."
+fi
+
 say "1. vLLM environment (separate from 3dmem, on purpose)"
 if [ -x "$CONDA_BASE/envs/$VLLM_ENV/bin/python" ]; then
     echo "  $VLLM_ENV already exists, skipping creation"
@@ -93,12 +116,15 @@ else
 fi
 PY_VLLM="$CONDA_BASE/envs/$VLLM_ENV/bin/python"
 "$PY_VLLM" -m pip install --upgrade pip
-"$PY_VLLM" -m pip install vllm || { echo "vllm install failed"; exit 1; }
+"$PY_VLLM" -m pip install "vllm${VLLM_VERSION:+==$VLLM_VERSION}" || { echo "vllm install failed"; exit 1; }
 "$PY_VLLM" -c "
 import vllm, torch
 print('  vllm', vllm.__version__, '| torch', torch.__version__, '| cuda', torch.version.cuda)
-print('  cuda available:', torch.cuda.is_available(), '| devices:', torch.cuda.device_count())
-"
+ok = torch.cuda.is_available()
+print('  cuda available:', ok, '| devices:', torch.cuda.device_count() if ok else 0)
+if not ok:
+    raise SystemExit('  torch cannot open a CUDA context -- check the driver/CUDA pairing above')
+"  || exit 1
 
 say "2. Qwen3.5 support in this vLLM build"
 "$PY_VLLM" -c "
