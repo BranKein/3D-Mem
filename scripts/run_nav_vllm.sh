@@ -55,17 +55,38 @@ SMOKE="${SMOKE:-0}"
 #   found (required by .../matplotlib/_c_internal_utils...so)
 # The env ships its own libstdc++; putting it first fixes it. Scoped to the evaluation
 # process, not exported globally, so nothing else on the box inherits it.
-# Preload only libstdc++, rather than putting the whole env lib directory first on
-# LD_LIBRARY_PATH: that directory also holds conda's libEGL/libGL, which would shadow
-# the system NVIDIA ones and leave habitat unable to make a headless GL context
-#   GL::Context: cannot retrieve OpenGL version: GL::Renderer::Error::InvalidValue
+# Two preloads, both needed, and neither is LD_LIBRARY_PATH: prepending the whole env
+# lib directory would shadow more than intended.
+#
+#   libGLdispatch, from the SYSTEM. habitat links the system libEGL but resolves
+#   libGLdispatch out of the conda env, and glvnd needs both halves from the same
+#   installation -- mixed, the dispatch table is never filled, every GL entry point is
+#   null, and habitat aborts with
+#     GL::Context: cannot retrieve OpenGL version: GL::Renderer::Error::InvalidValue
+#   even though EGL enumerates every device. Forcing the system one gives
+#     Renderer: NVIDIA A30/PCIe/SSE2 | OpenGL version: 4.6.0 NVIDIA 535.230.02
+#
+#   libstdc++, from the ENV. Calling $ENV/bin/python directly skips `conda activate`,
+#   and the host's libstdc++ is older than what the env's extensions were built
+#   against: numba/llvmlite and matplotlib fail to import on GLIBCXX_3.4.29.
 EVAL_PREFIX="$(dirname "$(dirname "$PY")")"
 EVAL_PRELOAD=""
-[ -e "$EVAL_PREFIX/lib/libstdc++.so.6" ] && EVAL_PRELOAD="$EVAL_PREFIX/lib/libstdc++.so.6"
-if [ -z "$EVAL_PRELOAD" ]; then
-    echo "note: no libstdc++ in $EVAL_PREFIX/lib -- if the evaluation dies on GLIBCXX,"
-    echo "      run: conda install -n \$(basename "$EVAL_PREFIX") -c conda-forge libstdcxx-ng"
+for lib in /lib/x86_64-linux-gnu/libGLdispatch.so.0 /usr/lib/x86_64-linux-gnu/libGLdispatch.so.0; do
+    [ -e "$lib" ] && { EVAL_PRELOAD="$lib"; break; }
+done
+if [ -e "$EVAL_PREFIX/lib/libstdc++.so.6" ]; then
+    EVAL_PRELOAD="${EVAL_PRELOAD:+$EVAL_PRELOAD:}$EVAL_PREFIX/lib/libstdc++.so.6"
 fi
+case "$EVAL_PRELOAD" in
+    *libGLdispatch*) ;;
+    *) echo "note: no system libGLdispatch found. If habitat aborts with 'cannot retrieve"
+       echo "      OpenGL version', find it with: ldconfig -p | grep libGLdispatch" ;;
+esac
+case "$EVAL_PRELOAD" in
+    *libstdc++*) ;;
+    *) echo "note: no libstdc++ in $EVAL_PREFIX/lib -- if the evaluation dies on GLIBCXX,"
+       echo "      run: conda install -n $(basename "$EVAL_PREFIX") -c conda-forge libstdcxx-ng" ;;
+esac
 
 # Sampling. The evaluation builds its client at import time and cannot read cfg, so
 # these arrive through the environment (src/const.py -> create_vlm_client).
