@@ -48,6 +48,20 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-65536}"
 PORT="${PORT:-8000}"
 SMOKE="${SMOKE:-0}"
 
+# Calling $ENV/bin/python directly skips `conda activate`, and with it the library
+# paths activation would have set. The usual casualty is a compiled extension built
+# against a newer toolchain than the host's:
+#   ImportError: /lib/x86_64-linux-gnu/libstdc++.so.6: version `GLIBCXX_3.4.29' not
+#   found (required by .../matplotlib/_c_internal_utils...so)
+# The env ships its own libstdc++; putting it first fixes it. Scoped to the evaluation
+# process, not exported globally, so nothing else on the box inherits it.
+EVAL_PREFIX="$(dirname "$(dirname "$PY")")"
+EVAL_LD_PATH="$EVAL_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+if [ ! -e "$EVAL_PREFIX/lib/libstdc++.so.6" ]; then
+    echo "note: no libstdc++ in $EVAL_PREFIX/lib -- if the evaluation dies on GLIBCXX,"
+    echo "      run: conda install -n \$(basename "$EVAL_PREFIX") -c conda-forge libstdcxx-ng"
+fi
+
 # Sampling. The evaluation builds its client at import time and cannot read cfg, so
 # these arrive through the environment (src/const.py -> create_vlm_client).
 #   max_tokens: the built-in default is 4096, below what a thinking reply needs
@@ -121,7 +135,8 @@ for MODEL in "${MODEL_LIST[@]}"; do
 
     RUNLOG="$LOGDIR/run_${SLUG}.log"
     echo "[$(date +%H:%M:%S)] evaluating on GPU $EVAL_GPU (log: $RUNLOG)"
-    CUDA_VISIBLE_DEVICES="$EVAL_GPU" VLM_PROVIDER=vllm VLLM_MODEL="$SERVED" VLLM_TIMEOUT=1800 \
+    CUDA_VISIBLE_DEVICES="$EVAL_GPU" LD_LIBRARY_PATH="$EVAL_LD_PATH" \
+    VLM_PROVIDER=vllm VLLM_MODEL="$SERVED" VLLM_TIMEOUT=1800 \
         "$PY" run_refonbench_evaluation.py -cf "$CFG" --exp-name "$EXP" "${extra[@]}" \
         > "$RUNLOG" 2>&1
     rc=$?
