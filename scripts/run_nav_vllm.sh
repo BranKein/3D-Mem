@@ -35,7 +35,16 @@ LOGDIR="${LOGDIR:-$REPO/results/vllm_nav_runs}"
 # 24 GB card a 9B in bf16 will not fit alongside it, so use QUANT=fp8 there).
 VLLM_GPU="${VLLM_GPU:-1}"      # may be a list: VLLM_GPU=1,2 with TP=2
 EVAL_GPU="${EVAL_GPU:-0}"
-VLLM_UTIL="${VLLM_UTIL:-0.90}"
+VLLM_UTIL="${VLLM_UTIL:-0.85}"
+
+# vLLM sizes the KV cache to fill whatever gpu_memory_utilization leaves after the
+# weights, then warms the sampler up for max_num_seqs concurrent requests -- and
+# with the default 256 there is nothing left for it:
+#   CUDA out of memory occurred when warming up sampler with 256 dummy requests
+# Adding GPUs does not fix that; the cache simply grows to fill them too. This
+# evaluation issues one request at a time (unlike the feasibility probes, which
+# fan out with --workers), so a small number here costs nothing and frees a lot.
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
 
 # Shard the model across GPUs. 9B in bf16 is 18.1 GiB of weights, and on a 24 GiB
 # card that leaves too little for the KV cache and the multimodal encoder -- it dies
@@ -131,7 +140,8 @@ for MODEL in "${MODEL_LIST[@]}"; do
     echo "=== $MODEL -> results/$EXP ==="
 
     args=(--served-model-name "$SERVED" --max-model-len "$MAX_MODEL_LEN"
-          --reasoning-parser qwen3 --gpu-memory-utilization "$VLLM_UTIL" --port "$PORT")
+          --reasoning-parser qwen3 --gpu-memory-utilization "$VLLM_UTIL"
+          --max-num-seqs "$MAX_NUM_SEQS" --port "$PORT")
     [ -n "$QUANT" ] && args+=(--quantization "$QUANT")
     [ "$TP" -gt 1 ] && args+=(--tensor-parallel-size "$TP")
 
