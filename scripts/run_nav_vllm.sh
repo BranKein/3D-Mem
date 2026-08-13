@@ -100,7 +100,18 @@ for MODEL in "${MODEL_LIST[@]}"; do
         sleep 10
     done
     if [ "$ready" != 1 ]; then
-        echo "  server never came up; last lines:"; tail -40 "$SERVER_LOG"; stop_server; continue
+        echo "  server never came up."
+        # The tail of this log is the API server re-raising, ending in "See root cause
+        # above" -- the cause itself is further up, in the EngineCore output. Show that
+        # instead, and only fall back to the tail if nothing matches.
+        if grep -aqE "^\(EngineCore" "$SERVER_LOG"; then
+            echo "  --- EngineCore, first failure ---"
+            grep -anE "^\(EngineCore.*(Error|ERROR|Traceback|raise |Exception|not supported|Unsupported|capability|out of memory|KV cache|assert)" \
+                "$SERVER_LOG" | head -25
+        fi
+        echo "  --- last 25 lines ---"; tail -25 "$SERVER_LOG"
+        echo "  full log: $SERVER_LOG"
+        stop_server; continue
     fi
     echo "  server up"
     grep -aE "GPU KV cache size|Maximum concurrency" "$SERVER_LOG" | tail -2
