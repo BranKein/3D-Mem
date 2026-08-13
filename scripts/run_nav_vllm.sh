@@ -130,8 +130,16 @@ for MODEL in "${MODEL_LIST[@]}"; do
     echo "  server up"
     grep -aE "GPU KV cache size|Maximum concurrency" "$SERVER_LOG" | tail -2
 
-    extra=()
-    [ "$SMOKE" -gt 0 ] && extra=(--end_ratio 0.05)   # a slice, for a shakedown
+    # --split is the size knob, not --end_ratio. The scene list is sliced as
+    # [int(start*n) : int(end*n)] (run_refonbench_evaluation.py:76), so on a
+    # single-scene dataset any end_ratio below 1.0 selects zero scenes and the run
+    # "succeeds" having done nothing. --split picks one episode per scene (the
+    # default, and the right shakedown); --split 0 runs all of them.
+    if [ "$SMOKE" -gt 0 ]; then
+        extra=(--split 1)
+    else
+        extra=(--split 0)
+    fi
 
     RUNLOG="$LOGDIR/run_${SLUG}.log"
     echo "[$(date +%H:%M:%S)] evaluating on GPU $EVAL_GPU (log: $RUNLOG)"
@@ -147,11 +155,20 @@ for MODEL in "${MODEL_LIST[@]}"; do
         grep -anE "Error|Traceback|No such file|not found|CUDA|assert" "$RUNLOG" | tail -10
         echo "  ---"
         tail -25 "$RUNLOG"
+    elif grep -aq "Total number of scenes: 0" "$RUNLOG"; then
+        # Exit 0 having evaluated nothing: every aggregate comes out nan over len 0.
+        # Worth failing loudly, because the summary line otherwise reads like a pass.
+        echo "  FAILED: the run found 0 scenes and evaluated nothing."
+        echo "    check that these exist and are non-empty:"
+        grep -aE "^test_data_dir|^scene_data_path" "$CFG" | sed 's/^/      /'
     else
         echo "  exit 0"
+        scenes=$(grep -aoE "Total number of scenes: [0-9]+" "$RUNLOG" | tail -1)
+        echo "  ${scenes:-scene count not reported}"
         # An empty reply scores as a wrong answer, so a run can look finished and mean
         # nothing. This is the first number to look at.
         grep -acE "call_vlm_api returns None" "$RUNLOG" | sed 's/^/  empty replies: /'
+        grep -aE "Total success_by_(snapshot|distance) results" "$RUNLOG" | tail -2 | sed 's/^/  /'
     fi
     stop_server
 done
