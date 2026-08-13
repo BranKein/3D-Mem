@@ -33,9 +33,15 @@ LOGDIR="${LOGDIR:-$REPO/results/vllm_nav_runs}"
 # on each process. With one GPU, set both to 0 and drop VLLM_UTIL to leave the
 # perception stack room (0.55 is a reasonable start for a 9B in bf16 -- but on one
 # 24 GB card a 9B in bf16 will not fit alongside it, so use QUANT=fp8 there).
-VLLM_GPU="${VLLM_GPU:-1}"
+VLLM_GPU="${VLLM_GPU:-1}"      # may be a list: VLLM_GPU=1,2 with TP=2
 EVAL_GPU="${EVAL_GPU:-0}"
 VLLM_UTIL="${VLLM_UTIL:-0.90}"
+
+# Shard the model across GPUs. 9B in bf16 is 18.1 GiB of weights, and on a 24 GiB
+# card that leaves too little for the KV cache and the multimodal encoder -- it dies
+# during startup with "Tried to allocate 1.03 GiB ... 209 MiB is free". TP=2 puts
+# 9 GiB on each of two cards instead. Set VLLM_GPU to as many GPUs as TP.
+TP="${TP:-1}"
 
 # bf16 by default: an A30 is compute capability 8.0 and has no fp8 tensor cores, so
 # fp8 there only saves memory (via the Marlin path) and buys no speed. Set QUANT=fp8
@@ -127,9 +133,16 @@ for MODEL in "${MODEL_LIST[@]}"; do
     args=(--served-model-name "$SERVED" --max-model-len "$MAX_MODEL_LEN"
           --reasoning-parser qwen3 --gpu-memory-utilization "$VLLM_UTIL" --port "$PORT")
     [ -n "$QUANT" ] && args+=(--quantization "$QUANT")
+    [ "$TP" -gt 1 ] && args+=(--tensor-parallel-size "$TP")
+
+    n_gpu=$(echo "$VLLM_GPU" | tr ',' '\n' | grep -c .)
+    if [ "$n_gpu" -ne "$TP" ]; then
+        echo "  VLLM_GPU lists $n_gpu GPU(s) but TP=$TP; they have to match."
+        continue
+    fi
 
     SERVER_LOG="$LOGDIR/server_${SLUG}.log"
-    echo "[$(date +%H:%M:%S)] starting vLLM on GPU $VLLM_GPU -> $SERVER_LOG"
+    echo "[$(date +%H:%M:%S)] starting vLLM on GPU $VLLM_GPU (tp=$TP) -> $SERVER_LOG"
     CUDA_VISIBLE_DEVICES="$VLLM_GPU" "$VLLM" serve "$MODEL" "${args[@]}" > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
 
