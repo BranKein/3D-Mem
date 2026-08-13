@@ -55,9 +55,14 @@ SMOKE="${SMOKE:-0}"
 #   found (required by .../matplotlib/_c_internal_utils...so)
 # The env ships its own libstdc++; putting it first fixes it. Scoped to the evaluation
 # process, not exported globally, so nothing else on the box inherits it.
+# Preload only libstdc++, rather than putting the whole env lib directory first on
+# LD_LIBRARY_PATH: that directory also holds conda's libEGL/libGL, which would shadow
+# the system NVIDIA ones and leave habitat unable to make a headless GL context
+#   GL::Context: cannot retrieve OpenGL version: GL::Renderer::Error::InvalidValue
 EVAL_PREFIX="$(dirname "$(dirname "$PY")")"
-EVAL_LD_PATH="$EVAL_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-if [ ! -e "$EVAL_PREFIX/lib/libstdc++.so.6" ]; then
+EVAL_PRELOAD=""
+[ -e "$EVAL_PREFIX/lib/libstdc++.so.6" ] && EVAL_PRELOAD="$EVAL_PREFIX/lib/libstdc++.so.6"
+if [ -z "$EVAL_PRELOAD" ]; then
     echo "note: no libstdc++ in $EVAL_PREFIX/lib -- if the evaluation dies on GLIBCXX,"
     echo "      run: conda install -n \$(basename "$EVAL_PREFIX") -c conda-forge libstdcxx-ng"
 fi
@@ -143,7 +148,7 @@ for MODEL in "${MODEL_LIST[@]}"; do
 
     RUNLOG="$LOGDIR/run_${SLUG}.log"
     echo "[$(date +%H:%M:%S)] evaluating on GPU $EVAL_GPU (log: $RUNLOG)"
-    CUDA_VISIBLE_DEVICES="$EVAL_GPU" LD_LIBRARY_PATH="$EVAL_LD_PATH" \
+    CUDA_VISIBLE_DEVICES="$EVAL_GPU" ${EVAL_PRELOAD:+LD_PRELOAD="$EVAL_PRELOAD"} \
     VLM_PROVIDER=vllm VLLM_MODEL="$SERVED" VLLM_TIMEOUT=1800 \
         "$PY" run_refonbench_evaluation.py -cf "$CFG" --exp-name "$EXP" "${extra[@]}" \
         > "$RUNLOG" 2>&1
