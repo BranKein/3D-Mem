@@ -148,8 +148,10 @@ for MODEL in "${MODEL_LIST[@]}"; do
 
     RUNLOG="$LOGDIR/run_${SLUG}.log"
     echo "[$(date +%H:%M:%S)] evaluating on GPU $EVAL_GPU (log: $RUNLOG)"
-    CUDA_VISIBLE_DEVICES="$EVAL_GPU" ${EVAL_PRELOAD:+LD_PRELOAD="$EVAL_PRELOAD"} \
-    VLM_PROVIDER=vllm VLLM_MODEL="$SERVED" VLLM_TIMEOUT=1800 \
+    # via `env`, because bash only honours a VAR=value prefix written literally --
+    # one produced by parameter expansion is treated as the command to run.
+    env CUDA_VISIBLE_DEVICES="$EVAL_GPU" ${EVAL_PRELOAD:+LD_PRELOAD="$EVAL_PRELOAD"} \
+        VLM_PROVIDER=vllm VLLM_MODEL="$SERVED" VLLM_TIMEOUT=1800 \
         "$PY" run_refonbench_evaluation.py -cf "$CFG" --exp-name "$EXP" "${extra[@]}" \
         > "$RUNLOG" 2>&1
     rc=$?
