@@ -196,6 +196,15 @@ for MODEL in "${MODEL_LIST[@]}"; do
         # An empty reply scores as a wrong answer, so a run can look finished and mean
         # nothing. This is the first number to look at.
         grep -acE "call_vlm_api returns None" "$RUNLOG" | sed 's/^/  empty replies: /'
+        # A reply the parser cannot read is scored as a wrong answer, so this rate
+        # belongs next to the score rather than buried in the log. It is not a vLLM
+        # artefact -- the earlier qwen3-vl:30b run on ollama did it on 5 of 238 calls
+        # -- but it rises sharply on small models and would otherwise be invisible.
+        calls=$(grep -ac "chat/completions" "$RUNLOG")
+        bad=$(grep -ac "Error in splitting response" "$RUNLOG")
+        if [ "${calls:-0}" -gt 0 ]; then
+            echo "  unreadable replies: $bad / $calls calls"
+        fi
         grep -aE "Total success_by_(snapshot|distance) results" "$RUNLOG" | tail -2 | sed 's/^/  /'
     fi
     stop_server
