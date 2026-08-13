@@ -135,7 +135,12 @@ slug() { echo "$1" | sed 's|.*/||' | tr 'A-Z.' 'a-z_' | sed 's/[^a-z0-9]\+/_/g; 
 for MODEL in "${MODEL_LIST[@]}"; do
     SERVED="$(basename "$MODEL")"
     SLUG="$(slug "$MODEL")_vllm"
-    EXP="exp_eval_refonbench_default_${SLUG}"
+    # Take the base name from the config rather than hardcoding it: the only thing
+    # that separates eval_refonbench_default.yaml from eval_refonbench_history_included.yaml
+    # is exp_name and prompt_version, so a hardcoded prefix would file a
+    # history_included run under "default" and quietly mix the two.
+    base_exp=$(grep -E '^exp_name:' "$CFG" | head -1 | sed 's/^exp_name:[[:space:]]*//; s/"//g; s/'"'"'//g')
+    EXP="${base_exp:-exp_eval_refonbench}_${SLUG}"
     echo
     echo "=== $MODEL -> results/$EXP ==="
 
