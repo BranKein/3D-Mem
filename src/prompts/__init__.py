@@ -72,3 +72,4 @@ def describe() -> str:
 # import `register` from this package, so the name has to exist first.
 from src.prompts import default  # noqa: E402,F401
 from src.prompts import history_included  # noqa: E402,F401
+from src.prompts import action_rules  # noqa: E402,F401
