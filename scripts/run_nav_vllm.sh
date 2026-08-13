@@ -12,8 +12,17 @@
 #
 set -uo pipefail
 
-REPO="${REPO:-$HOME/3D-Mem}"
-CONDA_BASE="${CONDA_BASE:-$HOME/anaconda3}"
+# Default to the checkout this script was run from, not a guess at $HOME.
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+CONDA_BASE="${CONDA_BASE:-}"
+case "$CONDA_BASE" in
+    */bin/conda) CONDA_BASE="${CONDA_BASE%/bin/conda}" ;;
+    */condabin/conda) CONDA_BASE="${CONDA_BASE%/condabin/conda}" ;;
+esac
+if [ -z "$CONDA_BASE" ]; then
+    CONDA_BASE="$(conda info --base 2>/dev/null)"
+    [ -z "$CONDA_BASE" ] && CONDA_BASE="$HOME/anaconda3"
+fi
 PY="${PY:-$CONDA_BASE/envs/3dmem/bin/python}"
 VLLM="${VLLM:-$CONDA_BASE/envs/vllm/bin/vllm}"
 CFG="${CFG:-cfg/eval_refonbench_default.yaml}"

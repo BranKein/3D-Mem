@@ -18,7 +18,17 @@
 #
 set -uo pipefail
 
-CONDA_BASE="${CONDA_BASE:-$HOME/anaconda3}"
+# The conda *root*, not the binary -- but accept either, and fall back to asking
+# conda itself, which is right far more often than a guess at $HOME.
+CONDA_BASE="${CONDA_BASE:-}"
+case "$CONDA_BASE" in
+    */bin/conda) CONDA_BASE="${CONDA_BASE%/bin/conda}" ;;
+    */condabin/conda) CONDA_BASE="${CONDA_BASE%/condabin/conda}" ;;
+esac
+if [ -z "$CONDA_BASE" ]; then
+    CONDA_BASE="$(conda info --base 2>/dev/null)"
+    [ -z "$CONDA_BASE" ] && CONDA_BASE="$HOME/anaconda3"
+fi
 VLLM_ENV="${VLLM_ENV:-vllm}"
 MODELS=("Qwen/Qwen3.5-2B" "Qwen/Qwen3.5-4B" "Qwen/Qwen3.5-9B")
 CHECK_ONLY=0
@@ -50,7 +60,17 @@ else
     echo "  compute capability ${CAP:-?} has no fp8 tensor cores -- use bf16 (the default)"
 fi
 
-if [ ! -d "$CONDA_BASE" ]; then echo "conda not at $CONDA_BASE, set CONDA_BASE"; exit 1; fi
+if [ ! -d "$CONDA_BASE" ]; then
+    echo "conda root not found at $CONDA_BASE"
+    echo "  pass the root directory, not the binary:  CONDA_BASE=\$(conda info --base) $0"
+    exit 1
+fi
+echo "  conda root: $CONDA_BASE"
+if [ ! -w "$CONDA_BASE/envs" ]; then
+    warn "$CONDA_BASE/envs is not writable. Either run with write access, or put the"
+    warn "env somewhere you own and point the run script at it:"
+    warn "  conda create -y -p \$HOME/envs/vllm python=3.12   (then VLLM=\$HOME/envs/vllm/bin/vllm)"
+fi
 if [ -x "$CONDA_BASE/envs/3dmem/bin/python" ]; then
     echo -n "  3dmem env: "; "$CONDA_BASE/envs/3dmem/bin/python" -c \
         "import sys,openai;print('python',sys.version.split()[0],'openai',openai.__version__)" \
